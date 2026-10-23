@@ -23,7 +23,7 @@ Prerequisites: PowerShell 7, Azure CLI ≥ 2.60 (Bicep included), Python 3.10+ w
 2. Preview and deploy (what-if runs first; you are asked to confirm):
    `./scripts/deploy.ps1 -SubscriptionId <sub-id> -Owner <you>`
    Outputs land in `.secrets/lab.env` (git-ignored). Takes ≈ 30 minutes.
-3. Wait ~5 minutes for role assignments to propagate, then run a baseline:
+3. Wait ~5 minutes for role assignments to propagate, then run a baseline (results arrive via Log Analytics, typically 2–10 minutes after the run):
    `./scripts/run-test.ps1 -Failure none -BaselineSec 60 -FailureSec 0 -RecoverySec 0`
 4. Run failover/failback experiments (each ≈ 10 min):
    `./scripts/run-test.ps1 -Failure F1a -Repeat 3`
@@ -56,4 +56,4 @@ results/raw/    per-run CSVs, summaries and charts
 docs/           reference architecture, blog post, doc feedback, cost
 ```
 
-Lab-only shortcuts (not for production): subnets set `defaultOutboundAccess: true` so VMs can install packages without a NAT gateway, and the results storage account is publicly reachable but accepts Entra ID only (no shared keys). VMs have no public IPs; access is via `az vm run-command`.
+Lab-only shortcut (not for production): subnets set `defaultOutboundAccess: true` so VMs can install packages and reach the Log Analytics ingestion endpoint without a NAT gateway. VMs have no public IPs; access is via `az vm run-command`. Probe results are sent by each VM's managed identity to the `DnsProbe_CL` table through the Logs Ingestion API (no keys) and pulled back by `scripts/collect.ps1`; no storage account is used, so the lab also works where policy forces storage `publicNetworkAccess: Disabled`.

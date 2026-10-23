@@ -26,14 +26,10 @@ $root = Split-Path $PSScriptRoot -Parent
 $cfg = @{}
 Get-Content (Join-Path $root '.secrets/lab.env') | ForEach-Object { $k, $v = $_ -split '=', 2; $cfg[$k] = $v }
 az account set --subscription $cfg.SUB | Out-Null
-$acct = $cfg.RESULTS_ACCOUNT
-
-# Upload probe code once per invocation (VMs fetch it with their managed identity).
-foreach ($f in 'probe.py', 'probe.ps1') {
-    az storage blob upload --account-name $acct -c results -n "_bin/$f" -f (Join-Path $PSScriptRoot "probe/$f") `
-        --auth-mode login --overwrite -o none
-    if ($LASTEXITCODE) { throw "upload $f failed (Storage Blob Data Contributor may still be propagating)" }
-}
+# Probe code is embedded (base64) in each run-command, so VMs need no storage access.
+function B64File($f) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(([IO.File]::ReadAllText((Join-Path $PSScriptRoot "probe/$f"))).Replace("`r`n", "`n"))) }
+$pyB64 = B64File 'probe.py'
+$psB64 = B64File 'probe.ps1'
 
 $names = @(
     'app1.azure.contoso.internal', 'app2.azure.contoso.internal', 'whoami.lab.contoso.internal',
@@ -49,26 +45,25 @@ function Servers($d) { (@($designServers[$d]) + $cfg.IE_R1 + $cfg.IE_R2 | Select
 $linuxTpl = @'
 set -e
 mkdir -p /opt/dnsprobe /var/log/dnsprobe
-TOK=$(curl -sf -H Metadata:true "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fstorage.azure.com%2F" | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
-curl -sf -H "Authorization: Bearer $TOK" -H "x-ms-version: 2023-11-03" "https://__ACCT__.blob.core.windows.net/results/_bin/probe.py" -o /opt/dnsprobe/probe.py
+echo "__PYB64__" | base64 -d > /opt/dnsprobe/probe.py
 case "__PROFILE__" in
   resolved-default) ln -sf ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf ;;
   glibc-default) grep '^nameserver' /run/systemd/resolve/resolv.conf > /tmp/rc; rm -f /etc/resolv.conf; mv /tmp/rc /etc/resolv.conf ;;
   glibc-tuned) { grep '^nameserver' /run/systemd/resolve/resolv.conf; echo 'options timeout:1 attempts:2'; } > /tmp/rc; rm -f /etc/resolv.conf; mv /tmp/rc /etc/resolv.conf ;;
 esac
+systemctl restart systemd-resolved   # reset resolved's sticky 'current server' so every run starts on the first server
 resolvectl flush-caches || true
 systemd-run --unit "dnsprobe-__RUN__" --collect python3 /opt/dnsprobe/probe.py --run-id "__RUN__" --design "__DESIGN__" \
   --profile "__PROFILE__" --start-at __T0__ --end-at __TEND__ --names "__NAMES__" --dig-names "__DIGNAMES__" \
-  --servers "__SERVERS__" --account "__ACCT__"
+  --servers "__SERVERS__" --ingest-endpoint "__ING__" --dcr "__DCR__"
 echo "scheduled dnsprobe-__RUN__ on $(hostname); resolv.conf: $(readlink -f /etc/resolv.conf)"
 '@
 
 $winTpl = @'
 New-Item -ItemType Directory -Force -Path C:\dnsprobe | Out-Null
-$tok = (Invoke-RestMethod -Headers @{Metadata='true'} -Uri 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fstorage.azure.com%2F').access_token
-Invoke-WebRequest -UseBasicParsing -Headers @{Authorization="Bearer $tok";'x-ms-version'='2023-11-03'} -Uri 'https://__ACCT__.blob.core.windows.net/results/_bin/probe.ps1' -OutFile C:\dnsprobe\probe.ps1
+[IO.File]::WriteAllBytes('C:\dnsprobe\probe.ps1', [Convert]::FromBase64String('__PSB64__'))
 Clear-DnsClientCache
-$arg = '-NoProfile -ExecutionPolicy Bypass -File C:\dnsprobe\probe.ps1 -RunId __RUN__ -Design __DESIGN__ -StartAt __T0__ -EndAt __TEND__ -Names __NAMES__ -SrvNames __DIGNAMES__ -Servers __SERVERS__ -Account __ACCT__'
+$arg = '-NoProfile -ExecutionPolicy Bypass -File C:\dnsprobe\probe.ps1 -RunId __RUN__ -Design __DESIGN__ -StartAt __T0__ -EndAt __TEND__ -Names __NAMES__ -SrvNames __DIGNAMES__ -Servers __SERVERS__ -IngestEndpoint __ING__ -Dcr __DCR__'
 $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
 Register-ScheduledTask -TaskName 'dnsprobe-__RUN__' -Action $a -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
 Start-ScheduledTask -TaskName 'dnsprobe-__RUN__'
@@ -86,15 +81,17 @@ for ($rep = 1; $rep -le $Repeat; $rep++) {
     $tEnd = $tRestore + $RecoverySec
     $outDir = Join-Path $root "results/raw/$runId"
     New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+    $expectVms = @($cfg.LINUX_CLIENTS -split ',' | Where-Object { $_ } | ForEach-Object { ($_ -split ':')[1] })
+    if (-not $NoWindows) { $expectVms += @($cfg.WINDOWS_CLIENTS -split ',' | Where-Object { $_ } | ForEach-Object { ($_ -split ':')[1] }) }
     @{ run_id = $runId; failure = $Failure; design_param = $Design; linux_profile = $LinuxProfile
-        t0 = $t0; t_inject_planned = $tInject; t_restore_planned = $tRestore; t_end = $tEnd
+        t0 = $t0; t_inject_planned = $tInject; t_restore_planned = $tRestore; t_end = $tEnd; vms = $expectVms
     } | ConvertTo-Json | Set-Content (Join-Path $outDir 'run.json')
     Write-Host "== $runId  T0=$([DateTimeOffset]::FromUnixTimeSeconds($t0).UtcDateTime.ToString('HH:mm:ss'))Z" -ForegroundColor Cyan
 
     $jobs = @()
     foreach ($pair in ($cfg.LINUX_CLIENTS -split ',' | Where-Object { $_ })) {
         $d, $vm = $pair -split ':'
-        $script = Fill $linuxTpl @{ ACCT = $acct; PROFILE = $LinuxProfile; RUN = $runId; DESIGN = $d; T0 = $t0; TEND = $tEnd
+        $script = Fill $linuxTpl @{ PYB64 = $pyB64; ING = $cfg.INGEST_ENDPOINT; DCR = $cfg.DCR_ID; PROFILE = $LinuxProfile; RUN = $runId; DESIGN = $d; T0 = $t0; TEND = $tEnd
             NAMES = $names; DIGNAMES = $digNames; SERVERS = (Servers $d)
         }
         $jobs += Start-ThreadJob -ArgumentList $cfg.RG_R1, $vm, $script -ScriptBlock {
@@ -107,7 +104,7 @@ for ($rep = 1; $rep -le $Repeat; $rep++) {
     if (-not $NoWindows) {
         foreach ($pair in ($cfg.WINDOWS_CLIENTS -split ',' | Where-Object { $_ })) {
             $d, $vm = $pair -split ':'
-            $script = Fill $winTpl @{ ACCT = $acct; RUN = $runId; DESIGN = $d; T0 = $t0; TEND = $tEnd
+            $script = Fill $winTpl @{ PSB64 = $psB64; ING = $cfg.INGEST_ENDPOINT; DCR = $cfg.DCR_ID; RUN = $runId; DESIGN = $d; T0 = $t0; TEND = $tEnd
                 NAMES = $names; DIGNAMES = $digNames; SERVERS = (Servers $d)
             }
             $jobs += Start-ThreadJob -ArgumentList $cfg.RG_R1, $vm, $script -ScriptBlock {

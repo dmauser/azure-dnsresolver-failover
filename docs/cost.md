@@ -9,7 +9,7 @@ Retail list prices (USD, pay-as-you-go), from the [Azure Retail Prices API](http
 | DNS forwarding ruleset | 4 | $2.50 / month | $0.01 |
 | Linux VM `Standard_B2ats_v2` (4 clients + 2 dnsmasq) | 6 | $0.0094 / h | $0.06 |
 | Windows VM `Standard_B2as_v2` (clients B, C) | 2 | $0.0844 / h | $0.17 |
-| Private endpoints, private zones, Log Analytics, storage, DNS security policy queries | – | small at lab volume | ~$0.05 |
+| Private endpoints, private zones, Log Analytics (DNS logs + probe rows, ~20 MB/run), storage, DNS security policy queries | – | small at lab volume | ~$0.05 |
 | **Total** | | | **≈ $1.5 / h (≈ $36 / day)** |
 
 Resolver endpoints dominate the cost and are billed whether or not VMs are running, so **tear the lab down** (`scripts/teardown.ps1`) when you are done. Auto-shutdown only stops the VMs.

@@ -47,7 +47,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
           addressPrefix: subnetPrefix
           networkSecurityGroup: { id: nsg.id }
           routeTable: { id: rt.id }
-          // Lab only: lets clients install dnsutils and upload results. Use explicit egress in production.
+          // Lab only: lets clients install dnsutils and send probe results to Log Analytics. Use explicit egress in production.
           defaultOutboundAccess: true
         }
       }

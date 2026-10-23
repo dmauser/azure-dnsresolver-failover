@@ -31,14 +31,13 @@ $pub = (Get-Content "$key.pub" -Raw).Trim()
 $chars = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!#%*+-'
 $winPwd = -join (1..24 | ForEach-Object { $chars[(Get-Random -Maximum $chars.Length)] }) + 'Aa1!'
 
-$me = az ad signed-in-user show --query id -o tsv 2>$null
 $name = "dnsfo-$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmm'))"
 $common = @(
     '--location', $Location,
     '--template-file', (Join-Path $root 'infra/main.bicep'),
     '--parameters', "@$(Join-Path $root 'infra/main.parameters.json')",
     '--parameters', "owner=$Owner", "ttlTag=$TtlTag", "sshPublicKey=$pub",
-    "windowsAdminPassword=$winPwd", "deployerPrincipalId=$me"
+    "windowsAdminPassword=$winPwd"
 )
 
 Write-Host "== what-if ($name)" -ForegroundColor Cyan

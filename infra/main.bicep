@@ -30,8 +30,6 @@ param enableDnsQueryLogs bool = true
 param shortTtl int = 10
 @description('TTL (s) of app2, used to show cache masking (H10).')
 param longTtl int = 3600
-@description('Object ID of the person running the lab (granted blob access to the results account).')
-param deployerPrincipalId string = ''
 @description('Set false if the platform rejects NSGs on resolver-delegated subnets.')
 param attachResolverSubnetNsg bool = true
 
@@ -583,10 +581,8 @@ module shared 'modules/shared.bicep' = {
   params: {
     location: primaryLocation
     prefix: prefix
-    resultsStorageName: 'st${prefix}res${suffix}'
-    blobWriterPrincipalIds: [for (s, i) in spokes: linuxClients[i].outputs.principalId]
-    extraBlobWriterPrincipalIds: [for (w, j) in windowsSpokes: windowsClients[j].outputs.principalId]
-    deployerPrincipalId: deployerPrincipalId
+    ingestPrincipalIds: [for (s, i) in spokes: linuxClients[i].outputs.principalId]
+    extraIngestPrincipalIds: [for (w, j) in windowsSpokes: windowsClients[j].outputs.principalId]
     tags: tags
   }
 }
@@ -630,7 +626,9 @@ output whoamiR1 string = r1.whoami
 output whoamiR2 string = r2.whoami
 output blobFqdnR1 string = saR1.outputs.blobFqdn
 output blobFqdnR2 string = saR2.outputs.blobFqdn
-output resultsAccount string = shared.outputs.resultsAccount
+output workspaceCustomerId string = shared.outputs.workspaceCustomerId
+output ingestEndpoint string = shared.outputs.ingestEndpoint
+output dcrImmutableId string = shared.outputs.dcrImmutableId
 output resolverR1 string = hub1.outputs.resolverName
 output resolverR2 string = hub2.outputs.resolverName
 output linuxClients array = [for (s, i) in spokes: { design: s.design, vm: linuxClients[i].outputs.vmName }]

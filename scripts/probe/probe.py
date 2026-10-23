@@ -10,11 +10,12 @@ Methods
   dig@<server>  dig straight at one server with +time/+tries (raw per-server reachability)
   resolvectl    every 5 s, the systemd-resolved 'Current DNS Server' (answer column)
 
-Only the Python standard library and 'dig' are used. At the end the CSV is uploaded to the
-results storage account with the VM managed identity (no keys).
+Only the Python standard library and 'dig' are used. At the end the rows are sent to Log
+Analytics (DnsProbe_CL) via the Logs Ingestion API with the VM managed identity (no keys).
 """
 import argparse
 import csv
+import gzip
 import json
 import os
 import socket
@@ -122,24 +123,40 @@ def imds_token(resource):
         return json.load(r)["access_token"]
 
 
-def upload(path, account, blob):
-    tok = imds_token("https://storage.azure.com/")
-    with open(path, "rb") as fh:
-        data = fh.read()
-    url = f"https://{account}.blob.core.windows.net/results/{blob}"
-    req = urllib.request.Request(
-        url,
-        data=data,
-        method="PUT",
-        headers={
-            "Authorization": f"Bearer {tok}",
-            "x-ms-version": "2023-11-03",
-            "x-ms-blob-type": "BlockBlob",
-            "Content-Type": "text/csv",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return r.status
+def ingest(path, endpoint, dcr, run_id, chunk=1000):
+    """Send the CSV to Log Analytics (DnsProbe_CL) via the Logs Ingestion API, then a 'meta' row
+    whose answer is the data-row count so the collector knows when this VM is complete."""
+    tok = imds_token("https://monitor.azure.com/")
+    url = f"{endpoint}/dataCollectionRules/{dcr}/streams/Custom-DnsProbe?api-version=2023-01-01"
+    with open(path, newline="") as fh:
+        rows = [
+            {
+                "TimeGenerated": r["ts"], "RunId": run_id, "Vm": r["vm"], "Os": r["os"], "Design": r["design"],
+                "Profile": r["profile"], "Name": r["name"], "Method": r["method"], "Server": r["server"],
+                "Rcode": r["rcode"], "Answer": r["answer"], "Ms": int(r["ms"] or 0),
+            }
+            for r in csv.DictReader(fh)
+        ]
+    if rows:
+        meta = dict(rows[-1], TimeGenerated=now(), Name="-", Method="meta", Server="", Rcode="DONE", Answer=str(len(rows)), Ms=0)
+    else:
+        return 0
+    batches = [rows[i:i + chunk] for i in range(0, len(rows), chunk)] + [[meta]]
+    for b in batches:
+        body = gzip.compress(json.dumps(b).encode())
+        for attempt in range(5):
+            try:
+                req = urllib.request.Request(url, data=body, method="POST", headers={
+                    "Authorization": "Bearer " + tok, "Content-Type": "application/json", "Content-Encoding": "gzip"})
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    if r.status in (200, 204):
+                        break
+            except Exception as e:  # transient network/DNS/throttling: back off and retry
+                print(f"ingest retry {attempt}: {e}")
+                time.sleep(5 * (attempt + 1))
+        else:
+            raise RuntimeError("ingestion failed")
+    return len(rows)
 
 
 def main():
@@ -158,7 +175,8 @@ def main():
     p.add_argument("--dig-tries", type=int, default=1)
     p.add_argument("--tcp", action="store_true", help="also probe dig names over TCP")
     p.add_argument("--out", default="/var/log/dnsprobe")
-    p.add_argument("--account", default="")
+    p.add_argument("--ingest-endpoint", default="")
+    p.add_argument("--dcr", default="")
     args = p.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -191,9 +209,9 @@ def main():
         t.join(timeout=15)
     w.close()
 
-    if args.account:
-        status = upload(path, args.account, f"{args.run_id}/{os.path.basename(path)}")
-        print(f"uploaded {path} -> {status}")
+    if args.ingest_endpoint and args.dcr:
+        n = ingest(path, args.ingest_endpoint, args.dcr, args.run_id)
+        print(f"ingested {n} rows from {path}")
     else:
         print(f"wrote {path}")
 

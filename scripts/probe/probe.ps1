@@ -7,7 +7,7 @@
     os       Resolve-DnsName -DnsOnly (DNS Client service: server list, failover logic and cache)
     os-api   [System.Net.Dns]::GetHostAddresses (what most .NET apps do)
     srv      Resolve-DnsName -Server <ip> -DnsOnly -QuickTimeout (raw per-server reachability)
-  At the end the CSV is uploaded to the results account with the VM managed identity.
+  At the end the rows are sent to Log Analytics (DnsProbe_CL) via the Logs Ingestion API with the VM managed identity.
 #>
 param(
     [Parameter(Mandatory)][string]$RunId,
@@ -19,7 +19,8 @@ param(
     [double]$EndAt = 0,
     [int]$Duration = 420,
     [double]$Interval = 0.5,
-    [string]$Account = '',
+    [string]$IngestEndpoint = '',
+    [string]$Dcr = '',
     [string]$Out = 'C:\dnsprobe\out'
 )
 $ErrorActionPreference = 'Stop'
@@ -96,10 +97,27 @@ $csv = Join-Path $Out "$($RunId)_$($vm)_windows-default.csv"
 Set-Content -Path $csv -Value 'ts,vm,os,design,profile,name,method,server,rcode,answer,ms'
 foreach ($p in $parts) { if (Test-Path $p) { Get-Content $p | Add-Content -Path $csv; Remove-Item $p } }
 
-if ($Account) {
-    $tok = (Invoke-RestMethod -Headers @{ Metadata = 'true' } -Uri 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fstorage.azure.com%2F').access_token
-    $uri = "https://$Account.blob.core.windows.net/results/$RunId/$(Split-Path $csv -Leaf)"
-    $hdr = @{ Authorization = "Bearer $tok"; 'x-ms-version' = '2023-11-03'; 'x-ms-blob-type' = 'BlockBlob' }
-    Invoke-RestMethod -Method Put -Uri $uri -Headers $hdr -InFile $csv -ContentType 'text/csv' | Out-Null
-    "uploaded $csv"
+if ($IngestEndpoint -and $Dcr) {
+    $tok = (Invoke-RestMethod -Headers @{ Metadata = 'true' } -Uri 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fmonitor.azure.com%2F').access_token
+    $uri = "$IngestEndpoint/dataCollectionRules/$Dcr/streams/Custom-DnsProbe?api-version=2023-01-01"
+    $rows = @(Import-Csv $csv | ForEach-Object {
+            [ordered]@{ TimeGenerated = $_.ts; RunId = $RunId; Vm = $_.vm; Os = $_.os; Design = $_.design; Profile = $_.profile
+                Name = $_.name; Method = $_.method; Server = $_.server; Rcode = $_.rcode; Answer = $_.answer; Ms = [int]$_.ms
+            } })
+    if ($rows.Count) {
+        $meta = [ordered]@{}; foreach ($k in $rows[-1].Keys) { $meta[$k] = $rows[-1][$k] }
+        $meta.TimeGenerated = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ'); $meta.Name = '-'; $meta.Method = 'meta'
+        $meta.Server = ''; $meta.Rcode = 'DONE'; $meta.Answer = [string]$rows.Count; $meta.Ms = 0
+        $batches = @()
+        for ($i = 0; $i -lt $rows.Count; $i += 500) { $batches += , ($rows[$i..([Math]::Min($i + 499, $rows.Count - 1))]) }
+        $batches += , @($meta)
+        foreach ($b in $batches) {
+            $body = [Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject @($b) -Compress))
+            for ($a = 0; $a -lt 5; $a++) {
+                try { Invoke-RestMethod -Method Post -Uri $uri -Body $body -ContentType 'application/json' -Headers @{ Authorization = "Bearer $tok" } | Out-Null; break }
+                catch { Start-Sleep -Seconds (5 * ($a + 1)); if ($a -eq 4) { throw } }
+            }
+        }
+    }
+    "ingested $($rows.Count) rows from $csv"
 }
