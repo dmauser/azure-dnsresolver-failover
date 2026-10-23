@@ -1,0 +1,18 @@
+{
+  "failure": "F4",
+  "t_end": 1792722813,
+  "design_param": "b",
+  "run_id": "20261023T022003-F4-resolved-default-r1",
+  "linux_profile": "resolved-default",
+  "t_restore_planned": 1792722513,
+  "vms": [
+    "vm-dnsfo-lnx-a",
+    "vm-dnsfo-lnx-b",
+    "vm-dnsfo-lnx-c",
+    "vm-dnsfo-lnx-d",
+    "vm-dnsfo-win-b",
+    "vm-dnsfo-win-c"
+  ],
+  "t_inject_planned": 1792722213,
+  "t0": 1792722153
+}

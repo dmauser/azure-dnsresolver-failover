@@ -1,0 +1,5 @@
+ts,run_id,failure,event,detail
+2026-10-23T02:12:10.648Z,20261023T020835-F2-resolved-default-r1,F2,inject_start,design=b
+2026-10-23T02:12:15.772Z,20261023T020835-F2-resolved-default-r1,F2,inject_done,design=b
+2026-10-23T02:15:06.698Z,20261023T020835-F2-resolved-default-r1,F2,restore_start,design=b
+2026-10-23T02:15:10.501Z,20261023T020835-F2-resolved-default-r1,F2,restore_done,design=b

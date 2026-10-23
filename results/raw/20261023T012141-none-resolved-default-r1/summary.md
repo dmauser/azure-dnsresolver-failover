@@ -2,10 +2,6 @@
 
 | design | os | profile | name | method | server |
 |---|---|---|---|---|---|
-| A | linux | resolved-default | - | resolvectl |  |
-| B | linux | resolved-default | - | resolvectl |  |
-| C | linux | resolved-default | - | resolvectl |  |
-| D | linux | resolved-default | - | resolvectl |  |
 | A | linux | resolved-default | app1.azure.contoso.internal | dig | 10.10.0.4 |
 | A | linux | resolved-default | app1.azure.contoso.internal | dig | 10.20.0.4 |
 | A | linux | resolved-default | app1.azure.contoso.internal | dig | 168.63.129.16 |

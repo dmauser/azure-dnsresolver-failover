@@ -1,0 +1,5 @@
+ts,run_id,failure,event,detail
+2026-10-23T01:48:19.458Z,20261023T014445-F1a-glibc-tuned-r1,F1a,inject_start,design=b
+2026-10-23T01:48:23.612Z,20261023T014445-F1a-glibc-tuned-r1,F1a,inject_done,design=b
+2026-10-23T01:51:16.577Z,20261023T014445-F1a-glibc-tuned-r1,F1a,restore_start,design=b
+2026-10-23T01:51:20.599Z,20261023T014445-F1a-glibc-tuned-r1,F1a,restore_done,design=b
