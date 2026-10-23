@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "prefix": { "value": "dnsfo" },
+    "primaryLocation": { "value": "eastus2" },
+    "secondaryLocation": { "value": "centralus" },
+    "deployWindows": { "value": true },
+    "linuxVmSize": { "value": "Standard_B2ats_v2" },
+    "windowsVmSize": { "value": "Standard_B2as_v2" },
+    "enableAutoShutdown": { "value": true },
+    "autoShutdownTimeUtc": { "value": "0300" },
+    "enableDnsQueryLogs": { "value": true },
+    "shortTtl": { "value": 10 },
+    "longTtl": { "value": 3600 },
+    "attachResolverSubnetNsg": { "value": true }
+  }
+}
