@@ -1,0 +1,5 @@
+ts,run_id,failure,event,detail
+2026-10-23T21:24:56.432Z,20261023T212122-onprem-link-break-resolved-default-r1,onprem-link-break,inject_start,
+2026-10-23T21:25:16.360Z,20261023T212122-onprem-link-break-resolved-default-r1,onprem-link-break,inject_done,
+2026-10-23T21:27:53.451Z,20261023T212122-onprem-link-break-resolved-default-r1,onprem-link-break,restore_start,
+2026-10-23T21:28:12.833Z,20261023T212122-onprem-link-break-resolved-default-r1,onprem-link-break,restore_done,

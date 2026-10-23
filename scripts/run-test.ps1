@@ -10,8 +10,7 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('F1a', 'F1b', 'F1c', 'F2', 'F3', 'F4', 'F5u', 'F5t', 'F6', 'onprem-link-break', 'none')][string]$Failure,
-    [ValidateSet('a', 'b', 'c', 'd')][string]$Design = 'b',
+    [Parameter(Mandatory)][ValidateSet('F1a', 'F1c', 'F2', 'F3', 'F4', 'F5u', 'F5t', 'onprem-link-break', 'none')][string]$Failure,
     [ValidateSet('resolved-default', 'glibc-default', 'glibc-tuned')][string]$LinuxProfile = 'resolved-default',
     [int]$BaselineSec = 60,
     [int]$FailureSec = 180,
@@ -38,25 +37,18 @@ $names = @(
     'host.onprem.contoso.internal', $cfg.BLOB_R1, 'www.microsoft.com'
 ) -join ','
 $digNames = 'whoami.lab.contoso.internal,app1.azure.contoso.internal'
-$designServers = @{
-    a = @('168.63.129.16'); d = @('168.63.129.16')
-    b = @($cfg.IE_R1, $cfg.IE_R2); c = @('168.63.129.16', $cfg.IE_R2)
-}
-if ($cfg.ONPREM_DNS_1) {
-    $designServers.op1 = @($cfg.ONPREM_DNS_1)
-    $designServers.op2 = @($cfg.ONPREM_DNS_2)
-}
-function Servers($d) { (@($designServers[$d]) + $cfg.IE_R1 + $cfg.IE_R2 | Select-Object -Unique) -join ',' }
+# Every Azure client uses custom DNS [IE-r1, IE-r2] in its region's order; on-prem clients use their local BIND.
+$siteServers = @{ r1 = @($cfg.IE_R1, $cfg.IE_R2); r2 = @($cfg.IE_R2, $cfg.IE_R1) }
+if ($cfg.ONPREM_DNS_1) { $siteServers.op1 = @($cfg.ONPREM_DNS_1); $siteServers.op2 = @($cfg.ONPREM_DNS_2) }
+function Servers($d) { (@($siteServers[$d]) + $cfg.IE_R1 + $cfg.IE_R2 | Select-Object -Unique) -join ',' }
+function Clients($list) { @($list -split ',' | Where-Object { $_ } | ForEach-Object { $d, $vm, $rg = $_ -split ':'; [pscustomobject]@{ d = $d; vm = $vm; rg = $(if ($rg) { $rg } else { $cfg.RG_R1 }) } }) }
 
-# Client list: design:vm:rg. Azure clients live in RG_R1; on-prem clients (ONPREM_CLIENTS = site:vm:rg) in their own RG.
+# Client entries are site:vm:rg (site = r1 | r2 | op1 | op2).
 $linuxClients = @()
-if (-not $OnPremOnly) {
-    $linuxClients += @($cfg.LINUX_CLIENTS -split ',' | Where-Object { $_ } | ForEach-Object { $d, $vm = $_ -split ':'; [pscustomobject]@{ d = $d; vm = $vm; rg = $cfg.RG_R1 } })
-}
-if (-not $NoOnPrem -and $cfg.ONPREM_CLIENTS) {
-    $linuxClients += @($cfg.ONPREM_CLIENTS -split ',' | Where-Object { $_ } | ForEach-Object { $d, $vm, $rg = $_ -split ':'; [pscustomobject]@{ d = $d; vm = $vm; rg = $rg } })
-}
+if (-not $OnPremOnly) { $linuxClients += Clients $cfg.LINUX_CLIENTS }
+if (-not $NoOnPrem -and $cfg.ONPREM_CLIENTS) { $linuxClients += Clients $cfg.ONPREM_CLIENTS }
 if ($OnPremOnly) { $NoWindows = $true }
+$winClients = if ($NoWindows) { @() } else { Clients $cfg.WINDOWS_CLIENTS }
 
 $linuxTpl = @'
 set -e
@@ -98,8 +90,8 @@ for ($rep = 1; $rep -le $Repeat; $rep++) {
     $outDir = Join-Path $root "results/raw/$runId"
     New-Item -ItemType Directory -Force -Path $outDir | Out-Null
     $expectVms = @($linuxClients | ForEach-Object vm)
-    if (-not $NoWindows) { $expectVms += @($cfg.WINDOWS_CLIENTS -split ',' | Where-Object { $_ } | ForEach-Object { ($_ -split ':')[1] }) }
-    @{ run_id = $runId; failure = $Failure; design_param = $Design; linux_profile = $LinuxProfile
+    $expectVms += @($winClients | ForEach-Object vm)
+    @{ run_id = $runId; failure = $Failure; linux_profile = $LinuxProfile
         t0 = $t0; t_inject_planned = $tInject; t_restore_planned = $tRestore; t_end = $tEnd; vms = $expectVms
     } | ConvertTo-Json | Set-Content (Join-Path $outDir 'run.json')
     Write-Host "== $runId  T0=$([DateTimeOffset]::FromUnixTimeSeconds($t0).UtcDateTime.ToString('HH:mm:ss'))Z" -ForegroundColor Cyan
@@ -117,13 +109,13 @@ for ($rep = 1; $rep -le $Repeat; $rep++) {
             Remove-Item $f; "$vm :: $r"
         }
     }
-    if (-not $NoWindows) {
-        foreach ($pair in ($cfg.WINDOWS_CLIENTS -split ',' | Where-Object { $_ })) {
-            $d, $vm = $pair -split ':'
+    foreach ($c in $winClients) {
+        $d = $c.d; $vm = $c.vm
+        if ($vm) {
             $script = Fill $winTpl @{ PSB64 = $psB64; ING = $cfg.INGEST_ENDPOINT; DCR = $cfg.DCR_ID; RUN = $runId; DESIGN = $d; T0 = $t0; TEND = $tEnd
                 NAMES = $names; DIGNAMES = $digNames; SERVERS = (Servers $d)
             }
-            $jobs += Start-ThreadJob -ArgumentList $cfg.RG_R1, $vm, $script -ScriptBlock {
+            $jobs += Start-ThreadJob -ArgumentList $c.rg, $vm, $script -ScriptBlock {
                 param($rg, $vm, $s)
                 $f = New-TemporaryFile; $p = "$f.ps1"; Set-Content $p $s
                 $r = az vm run-command invoke -g $rg -n $vm --command-id RunPowerShellScript --scripts "@$p" --query 'value[0].message' -o tsv 2>&1
@@ -137,9 +129,9 @@ for ($rep = 1; $rep -le $Repeat; $rep++) {
 
     if ($Failure -ne 'none') {
         Start-Sleep -Seconds ([Math]::Max(0, $tInject - [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()))
-        & (Join-Path $PSScriptRoot 'inject.ps1') -Action inject -Failure $Failure -Design $Design -RunId $runId -Prefix $Prefix
+        & (Join-Path $PSScriptRoot 'inject.ps1') -Action inject -Failure $Failure -RunId $runId -Prefix $Prefix
         Start-Sleep -Seconds ([Math]::Max(0, $tRestore - [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()))
-        & (Join-Path $PSScriptRoot 'inject.ps1') -Action restore -Failure $Failure -Design $Design -RunId $runId -Prefix $Prefix
+        & (Join-Path $PSScriptRoot 'inject.ps1') -Action restore -Failure $Failure -RunId $runId -Prefix $Prefix
     }
     $wait = $tEnd + 90 - [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     Write-Host "Waiting $wait s for probes to finish and upload..."

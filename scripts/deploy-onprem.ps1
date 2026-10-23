@@ -13,8 +13,8 @@
   ./scripts/deploy-onprem.ps1 -SubscriptionId <id> -Owner me@contoso.com -Connectivity Vpn
 .NOTES
   Requires the core lab (deploy.ps1) to exist first: it peers to / builds gateways in the hub VNets.
-  In VPN mode a GatewaySubnet is added to each hub VNet; re-running deploy.ps1 afterwards removes it
-  (hub subnets are declared inline), so re-run this script after any core redeploy.
+  The hub GatewaySubnet is part of the core deployment, so a core redeploy keeps it. Re-run this
+  script after a core redeploy anyway to restore the hub-side peerings/routes for the sites.
 #>
 [CmdletBinding()]
 param(

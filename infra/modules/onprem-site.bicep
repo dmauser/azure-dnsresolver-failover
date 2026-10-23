@@ -24,6 +24,10 @@ param autoShutdownTime string
 param tags object
 @description('BIND max-cache-ttl / max-ncache-ttl (s). Kept short so probes observe resolver failover instead of BIND cache.')
 param bindMaxCacheTtl int = 5
+@description('Private IP of the regional hub NVA router. Empty = no UDR (site reaches only directly-connected networks).')
+param nvaIp string = ''
+@description('Remote prefixes (other region hub/spoke/site) steered to the hub NVA.')
+param remoteRoutes array = []
 
 var octets = split(split(addressPrefix, '/')[0], '.')
 var base = '${octets[0]}.${octets[1]}'
@@ -44,6 +48,26 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   tags: tags
   properties: {
     securityRules: []
+  }
+}
+
+// Cross-region prefixes go to the regional hub NVA (service chaining over the site<->hub peering).
+resource rt 'Microsoft.Network/routeTables@2024-05-01' = if (!empty(nvaIp)) {
+  name: 'rt-${prefix}-${siteId}'
+  location: location
+  tags: tags
+  properties: {
+    disableBgpRoutePropagation: false
+    routes: [
+      for (r, i) in remoteRoutes: {
+        name: 'to-remote-${i}'
+        properties: {
+          addressPrefix: r
+          nextHopType: 'VirtualAppliance'
+          nextHopIpAddress: nvaIp
+        }
+      }
+    ]
   }
 }
 
@@ -71,6 +95,9 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
           networkSecurityGroup: {
             id: nsg.id
           }
+          routeTable: empty(nvaIp) ? null : {
+            id: rt.id
+          }
         }
       }
       {
@@ -79,6 +106,9 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
           addressPrefix: clientSubnetPrefix
           networkSecurityGroup: {
             id: nsg.id
+          }
+          routeTable: empty(nvaIp) ? null : {
+            id: rt.id
           }
         }
       }

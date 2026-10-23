@@ -1,14 +1,17 @@
 targetScope = 'subscription'
 
 // ---------------------------------------------------------------------------------------------
-// Optional add-on to main.bicep: two emulated on-premises sites for the recommended Design B.
+// Optional add-on to main.bicep: two emulated on-premises sites attached to the regional hubs.
 //
 //   op1 (primaryLocation)   BIND forwards Azure zones to [IE-r1, IE-r2]
 //   op2 (secondaryLocation) BIND forwards Azure zones to [IE-r2, IE-r1]
 //
-// connectivity = 'Peering' (default, cheapest): each site VNet is peered to BOTH hub VNets.
-// connectivity = 'Vpn': each site gets a VPN gateway and VNet-to-VNet IPsec/BGP connections to
-// a VPN gateway in each hub (closer to a real branch, ~45 min to deploy, higher cost).
+// Each site attaches to its REGIONAL hub only (op1 -> hub-r1, op2 -> hub-r2). Cross-region traffic
+// (e.g. op1 -> IE-r2 during failover) is steered by a UDR to the local hub NVA, which forwards it
+// over the hub<->hub peering.
+// connectivity = 'Peering' (default, cheapest): site VNet peered to its regional hub.
+// connectivity = 'Vpn': site VPN gateway + VNet-to-VNet IPsec/BGP connection to a VPN gateway in
+// its regional hub (closer to a real branch, ~45 min to deploy, higher cost).
 //
 // Requires main.bicep to be deployed first with the same prefix / locations.
 // ---------------------------------------------------------------------------------------------
@@ -49,7 +52,7 @@ var hubs = [
     location: primaryLocation
     vnetName: 'vnet-${prefix}-hub-r1'
     inboundIp: '10.10.0.4'
-    gwSubnet: '10.10.3.0/27'
+    nvaIp: '10.10.3.68'
     asn: 65511
   }
   {
@@ -58,7 +61,7 @@ var hubs = [
     location: secondaryLocation
     vnetName: 'vnet-${prefix}-hub-r2'
     inboundIp: '10.20.0.4'
-    gwSubnet: '10.20.3.0/27'
+    nvaIp: '10.20.3.68'
     asn: 65512
   }
 ]
@@ -73,6 +76,13 @@ var sites = [
       hubs[0].inboundIp
       hubs[1].inboundIp
     ]
+    hub: 0
+    remoteRoutes: [
+      '10.11.0.0/16'
+      '10.20.0.0/16'
+      '10.21.0.0/16'
+      '10.120.0.0/16'
+    ]
     asn: 65521
   }
   {
@@ -83,6 +93,13 @@ var sites = [
     forwarders: [
       hubs[1].inboundIp
       hubs[0].inboundIp
+    ]
+    hub: 1
+    remoteRoutes: [
+      '10.21.0.0/16'
+      '10.10.0.0/16'
+      '10.11.0.0/16'
+      '10.110.0.0/16'
     ]
     asn: 65522
   }
@@ -99,13 +116,19 @@ resource siteRgs 'Microsoft.Resources/resourceGroups@2024-03-01' = [
 module site 'modules/onprem-site.bicep' = [
   for (s, i) in sites: {
     name: 'onprem-${s.id}'
-    scope: siteRgs[i]
+    scope: resourceGroup(s.rg)
+    dependsOn: [
+      siteRgs
+    ]
     params: {
       location: s.location
       prefix: prefix
       siteId: s.id
       addressPrefix: s.addressPrefix
       inboundEndpointIps: s.forwarders
+      // UDR to the hub NVA only applies over peering; in VPN mode the gateway's BGP routes are used.
+      nvaIp: connectivity == 'Peering' ? hubs[s.hub].nvaIp : ''
+      remoteRoutes: s.remoteRoutes
       adminUsername: adminUsername
       sshPublicKey: sshPublicKey
       vmSize: linuxVmSize
@@ -118,9 +141,13 @@ module site 'modules/onprem-site.bicep' = [
 
 // ---- Peering mode ----------------------------------------------------------------------------
 var pairs = [
-  for k in range(0, 4): {
-    s: k / 2
-    h: k % 2
+  {
+    s: 0
+    h: 0
+  }
+  {
+    s: 1
+    h: 1
   }
 ]
 
@@ -132,6 +159,7 @@ module siteToHub 'modules/peering.bicep' = [
       localVnetName: 'vnet-${prefix}-${sites[p.s].id}'
       remoteVnetId: resourceId(subscription().subscriptionId, hubs[p.h].rg, 'Microsoft.Network/virtualNetworks', hubs[p.h].vnetName)
       peeringName: 'to-hub-${hubs[p.h].tag}'
+      allowForwardedTraffic: true
     }
     dependsOn: [
       site
@@ -147,6 +175,7 @@ module hubToSite 'modules/peering.bicep' = [
       localVnetName: hubs[p.h].vnetName
       remoteVnetId: resourceId(subscription().subscriptionId, sites[p.s].rg, 'Microsoft.Network/virtualNetworks', 'vnet-${prefix}-${sites[p.s].id}')
       peeringName: 'to-${sites[p.s].id}'
+      allowForwardedTraffic: true
     }
     dependsOn: [
       site
@@ -163,7 +192,6 @@ module hubGw 'modules/vpn-gateway.bicep' = [
       location: h.location
       name: 'vpngw-${prefix}-hub-${h.tag}'
       vnetName: h.vnetName
-      createGatewaySubnetPrefix: h.gwSubnet
       asn: h.asn
       sku: vpnGatewaySku
       tags: tags
@@ -174,7 +202,7 @@ module hubGw 'modules/vpn-gateway.bicep' = [
 module siteGw 'modules/vpn-gateway.bicep' = [
   for (s, i) in sites: if (connectivity == 'Vpn') {
     name: 'vpngw-${s.id}'
-    scope: siteRgs[i]
+    scope: resourceGroup(s.rg)
     params: {
       location: s.location
       name: 'vpngw-${prefix}-${s.id}'
@@ -233,7 +261,10 @@ module dcrIngest 'modules/dcr-role.bicep' = {
   scope: resourceGroup('rg-${prefix}-shared')
   params: {
     dcrName: 'dcr-${prefix}-probe'
-    principalIds: [for (s, i) in sites: site[i].outputs.clientPrincipalId]
+    principalIds: [
+      site[0].outputs.clientPrincipalId
+      site[1].outputs.clientPrincipalId
+    ]
   }
 }
 

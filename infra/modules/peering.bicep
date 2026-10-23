@@ -2,6 +2,10 @@
 param localVnetName string
 param remoteVnetId string
 param peeringName string
+@description('Accept traffic forwarded by an NVA in the remote VNet (needed hub<->spoke and hub<->hub).')
+param allowForwardedTraffic bool = true
+param allowGatewayTransit bool = false
+param useRemoteGateways bool = false
 
 resource local 'Microsoft.Network/virtualNetworks@2024-05-01' existing = {
   name: localVnetName
@@ -15,8 +19,8 @@ resource peering 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2024-
       id: remoteVnetId
     }
     allowVirtualNetworkAccess: true
-    allowForwardedTraffic: false
-    allowGatewayTransit: false
-    useRemoteGateways: false
+    allowForwardedTraffic: allowForwardedTraffic
+    allowGatewayTransit: allowGatewayTransit
+    useRemoteGateways: useRemoteGateways
   }
 }

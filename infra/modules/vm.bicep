@@ -18,6 +18,8 @@ param autoShutdownTime string = '0300'
 param tags object
 @description('Optional NIC-level DNS servers (overrides the VNet DNS setting for this VM only).')
 param nicDnsServers array = []
+@description('Enable NIC IP forwarding (router / NVA VMs).')
+param enableIpForwarding bool = false
 
 var isLinux = osType == 'linux'
 
@@ -40,6 +42,7 @@ resource nic 'Microsoft.Network/networkInterfaces@2024-05-01' = {
   location: location
   tags: tags
   properties: {
+    enableIPForwarding: enableIpForwarding
     ipConfigurations: [
       {
         name: 'ipconfig1'
