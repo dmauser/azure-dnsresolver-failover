@@ -32,7 +32,8 @@ def load(run_dir):
     ) else pd.DataFrame(columns=["ts", "event"])
     meta = json.load(open(os.path.join(run_dir, "run.json"))) if os.path.exists(os.path.join(run_dir, "run.json")) else {}
     frames = []
-    for f in glob.glob(os.path.join(run_dir, "*.csv")):
+    # Per-VM probe CSVs may be gzip-compressed (*.csv.gz) to keep the repo small.
+    for f in glob.glob(os.path.join(run_dir, "*.csv")) + glob.glob(os.path.join(run_dir, "*.csv.gz")):
         if os.path.basename(f) in ("events.csv", "summary.csv"):
             continue
         d = pd.read_csv(f, dtype=str, keep_default_na=False)
