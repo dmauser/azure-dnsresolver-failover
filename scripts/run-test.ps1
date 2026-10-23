@@ -99,7 +99,7 @@ for ($rep = 1; $rep -le $Repeat; $rep++) {
         }
         $jobs += Start-ThreadJob -ArgumentList $cfg.RG_R1, $vm, $script -ScriptBlock {
             param($rg, $vm, $s)
-            $f = New-TemporaryFile; Set-Content $f $s -NoNewline
+            $f = New-TemporaryFile; [IO.File]::WriteAllText($f, $s.Replace("`r`n", "`n"))
             $r = az vm run-command invoke -g $rg -n $vm --command-id RunShellScript --scripts "@$f" --query 'value[0].message' -o tsv 2>&1
             Remove-Item $f; "$vm :: $r"
         }
