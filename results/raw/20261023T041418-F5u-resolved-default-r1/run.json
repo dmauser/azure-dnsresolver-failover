@@ -1,0 +1,18 @@
+{
+  "linux_profile": "resolved-default",
+  "t_restore_planned": 1792729248,
+  "t_inject_planned": 1792729068,
+  "design_param": "b",
+  "failure": "F5u",
+  "t0": 1792729008,
+  "t_end": 1792729428,
+  "run_id": "20261023T041418-F5u-resolved-default-r1",
+  "vms": [
+    "vm-dnsfo-lnx-a",
+    "vm-dnsfo-lnx-b",
+    "vm-dnsfo-lnx-c",
+    "vm-dnsfo-lnx-d",
+    "vm-dnsfo-win-b",
+    "vm-dnsfo-win-c"
+  ]
+}

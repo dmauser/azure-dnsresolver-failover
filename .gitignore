@@ -1,0 +1,14 @@
+# Local secrets / generated state
+.secrets/
+*.pem
+id_*
+*.key
+infra/*.json
+!infra/*.parameters.json
+.env
+
+# Results working files (raw CSVs are committed explicitly under results/raw)
+results/tmp/
+__pycache__/
+*.pyc
+.venv/
