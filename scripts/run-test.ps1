@@ -129,4 +129,5 @@ for ($rep = 1; $rep -le $Repeat; $rep++) {
     Write-Host "Waiting $wait s for probes to finish and upload..."
     Start-Sleep -Seconds ([Math]::Max(0, $wait))
     & (Join-Path $PSScriptRoot 'collect.ps1') -RunId $runId
+    python (Join-Path $PSScriptRoot 'analyze.py') (Join-Path $PSScriptRoot "..\results\raw\$runId")
 }

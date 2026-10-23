@@ -42,6 +42,7 @@ def load(run_dir):
     if not frames:
         raise SystemExit(f"no probe CSVs in {run_dir}")
     df = pd.concat(frames, ignore_index=True)
+    df = df[df["method"] != "resolvectl"]  # resolver-state snapshots, not DNS probes
     df["ts"] = pd.to_datetime(df["ts"], utc=True, format="ISO8601")
     df["ms"] = pd.to_numeric(df["ms"], errors="coerce")
     df["ok"] = (df["rcode"] == "NOERROR") & (df["answer"] != "")
