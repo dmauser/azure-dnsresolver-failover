@@ -6,6 +6,8 @@
 .DESCRIPTION
   F1a  NSG deny UDP+TCP/53 inbound on the region-1 inbound endpoint subnet (snet-dns-inbound).
   F1b  NSG deny UDP+TCP/53 outbound to 10.10.0.4 on a client spoke subnet (-Design, default b).
+      NOTE: in testing this rule showed in effective rules but did NOT block DNS to the
+      inbound endpoint. Verify with dig @10.10.0.4, or prefer F2/F3 for path loss.
   F1c  F1a + NSG deny outbound 53 on both region-1 outbound endpoint subnets (whole regional resolver).
   F2   UDR 10.10.0.4/32 -> None on a client spoke (-Design, default b). Direct client->IE traffic only.
   F3   Remove spoke <-> hub-r1 peering (-Design, default b).
