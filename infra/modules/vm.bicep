@@ -16,6 +16,8 @@ param enableAutoShutdown bool = true
 @description('HHmm, UTC')
 param autoShutdownTime string = '0300'
 param tags object
+@description('Optional NIC-level DNS servers (overrides the VNet DNS setting for this VM only).')
+param nicDnsServers array = []
 
 var isLinux = osType == 'linux'
 
@@ -50,10 +52,13 @@ resource nic 'Microsoft.Network/networkInterfaces@2024-05-01' = {
         }
       }
     ]
+    dnsSettings: empty(nicDnsServers) ? null : {
+      dnsServers: nicDnsServers
+    }
   }
 }
 
-resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
+resource vm  'Microsoft.Compute/virtualMachines@2024-07-01' = {
   name: name
   location: location
   tags: tags

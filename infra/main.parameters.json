@@ -13,6 +13,7 @@
     "enableDnsQueryLogs": { "value": true },
     "shortTtl": { "value": 10 },
     "longTtl": { "value": 3600 },
-    "attachResolverSubnetNsg": { "value": true }
+    "attachResolverSubnetNsg": { "value": true },
+    "includeComparisonDesigns": { "value": false }
   }
 }

@@ -164,7 +164,7 @@ def main():
     p.add_argument("runs", nargs="*")
     p.add_argument("--all", action="store_true")
     a = p.parse_args()
-    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "raw")
+    root = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "raw"))
     runs = sorted(glob.glob(os.path.join(root, "*"))) if a.all else a.runs
     allsum = []
     for run in runs:

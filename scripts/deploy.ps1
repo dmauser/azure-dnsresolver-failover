@@ -5,6 +5,10 @@
 .EXAMPLE
   ./scripts/deploy.ps1 -SubscriptionId <id> -Owner me@contoso.com
   ./scripts/deploy.ps1 -SubscriptionId <id> -Owner me@contoso.com -WhatIfOnly
+  ./scripts/deploy.ps1 -SubscriptionId <id> -Owner me@contoso.com -IncludeComparisonDesigns
+.NOTES
+  Default deploys the recommended Design B only. -IncludeComparisonDesigns adds designs A, C, D
+  (see docs/design-comparison.md). Add emulated on-premises with ./scripts/deploy-onprem.ps1.
 #>
 [CmdletBinding()]
 param(
@@ -12,6 +16,7 @@ param(
     [Parameter(Mandatory)][string]$Owner,
     [string]$Location = 'eastus2',
     [string]$TtlTag = (Get-Date).ToUniversalTime().AddDays(7).ToString('yyyy-MM-dd'),
+    [switch]$IncludeComparisonDesigns,
     [switch]$WhatIfOnly,
     [switch]$Yes
 )
@@ -37,7 +42,7 @@ $common = @(
     '--template-file', (Join-Path $root 'infra/main.bicep'),
     '--parameters', "@$(Join-Path $root 'infra/main.parameters.json')",
     '--parameters', "owner=$Owner", "ttlTag=$TtlTag", "sshPublicKey=$pub",
-    "windowsAdminPassword=$winPwd"
+    "windowsAdminPassword=$winPwd", "includeComparisonDesigns=$($IncludeComparisonDesigns.IsPresent.ToString().ToLower())"
 )
 
 Write-Host "== what-if ($name)" -ForegroundColor Cyan

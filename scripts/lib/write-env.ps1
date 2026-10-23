@@ -22,4 +22,9 @@ $lines = @(
     "LINUX_CLIENTS=$(($o.linuxClients.value | ForEach-Object { "$($_.design):$($_.vm)" }) -join ',')"
     "WINDOWS_CLIENTS=$(($o.windowsClients.value | ForEach-Object { "$($_.design):$($_.vm)" }) -join ',')"
 )
-$lines | Set-Content (Join-Path (Split-Path $OutputsPath) 'lab.env')
+$envPath = Join-Path (Split-Path $OutputsPath) 'lab.env'
+# Keep keys written by deploy-onprem.ps1 so redeploying the core lab does not drop them.
+if (Test-Path $envPath) {
+    $lines += Get-Content $envPath | Where-Object { $_ -match '^(ONPREM_|RG_ONPREM)' }
+}
+$lines | Set-Content $envPath

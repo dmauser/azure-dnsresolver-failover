@@ -1,8 +1,12 @@
-# Reference architecture: regional failover for Azure DNS Private Resolver (Azure-to-Azure)
+# Design comparison: why Design B is the recommended architecture
 
-> **Scope.** How Azure VMs keep resolving private names when the DNS Private Resolver in their primary region becomes unreachable, and how they fail back. On-premises → Azure failover is already covered by Microsoft Learn ([tutorial](https://learn.microsoft.com/azure/dns/tutorial-dns-private-resolver-failover)); this document covers the **Azure VM → resolver** path, which is not.
+← Back to the [recommended reference architecture (Design B)](../README.md)
+
+> **Scope.** This page compares four ways to point Azure VMs at DNS Private Resolver and shows the measurements that led us to recommend **Design B**. It covers the **Azure VM → resolver** path. On-premises → Azure failover is covered by the [Microsoft Learn tutorial](https://learn.microsoft.com/azure/dns/tutorial-dns-private-resolver-failover) and by the on-premises extension of this lab ([README](../README.md#on-premises-extension)).
 >
 > **Evidence rule.** Every statement is either **measured** in this lab (run IDs in [results/summary.md](../results/summary.md)) or **cited** to Microsoft Learn. Anything else is labelled *hypothesis* or *inference*.
+>
+> **Deploying the comparison designs.** The default deployment builds Design B only. To reproduce this page, deploy with `./scripts/deploy.ps1 ... -IncludeComparisonDesigns`, which adds spokes A, C and D, the spoke rulesets and the second outbound endpoint.
 
 ## TL;DR
 
@@ -15,9 +19,9 @@
 
 Long TTLs hide short outages (app2, TTL 3600: ≥ 96.6 % even on Design A) but they don't fix anything — answers expire eventually.
 
-![Lab topology](diagrams/dns-resolver-failover-lab.png)
+![Comparison lab topology (designs A–D)](diagrams/dns-resolver-failover-lab.png)
 
-*Editable source: [diagrams/dns-resolver-failover-lab.drawio](diagrams/dns-resolver-failover-lab.drawio).*
+*Topology with `-IncludeComparisonDesigns`. Editable source: [diagrams/dns-resolver-failover-lab.drawio](diagrams/dns-resolver-failover-lab.drawio).*
 
 ## 1. Topology
 
@@ -147,7 +151,7 @@ Full per-run tables (all names, methods, rcodes, p50/max latency) and timeline c
 
 ## 8. Reproduce
 
-See the [README](../README.md#run-it). The lab costs ≈ $1.5/hour ([cost.md](cost.md)); tear it down with `scripts/teardown.ps1`.
+Follow the [README](../README.md#deploy-the-lab) and add `-IncludeComparisonDesigns` to `deploy.ps1`. Then run tests with `-Design a|b|c|d`, for example `./scripts/run-test.ps1 -Failure F6 -Design c`. With all four designs the lab costs ≈ $1.5/hour, against ≈ $1.1/hour for B only ([cost.md](cost.md)). Tear it down with `scripts/teardown.ps1` when you're done.
 
 ---
 
