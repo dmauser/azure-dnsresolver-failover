@@ -137,10 +137,10 @@ def ingest(path, endpoint, dcr, run_id, chunk=1000):
             }
             for r in csv.DictReader(fh)
         ]
+    base = {"RunId": run_id, "Vm": socket.gethostname(), "Os": "linux", "Design": "", "Profile": ""}
     if rows:
-        meta = dict(rows[-1], TimeGenerated=now(), Name="-", Method="meta", Server="", Rcode="DONE", Answer=str(len(rows)), Ms=0)
-    else:
-        return 0
+        base.update({k: rows[-1][k] for k in ("Design", "Profile")})
+    meta = dict(base, TimeGenerated=now(), Name="-", Method="meta", Server="", Rcode="DONE", Answer=str(len(rows)), Ms=0)
     batches = [rows[i:i + chunk] for i in range(0, len(rows), chunk)] + [[meta]]
     for b in batches:
         body = gzip.compress(json.dumps(b).encode())

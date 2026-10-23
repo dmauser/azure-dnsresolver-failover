@@ -27,7 +27,7 @@ $envFile = Join-Path $root '.secrets/lab.env'
 $cfg = @{}
 Get-Content $envFile | ForEach-Object { $k, $v = $_ -split '=', 2; $cfg[$k] = $v }
 $sub = $cfg.SUB; $rg1 = $cfg.RG_R1; $ie1 = $cfg.IE_R1
-az account set --subscription $sub | Out-Null
+. (Join-Path $PSScriptRoot 'lib/azctx.ps1') -SubscriptionId $sub
 
 $evDir = Join-Path $root "results/raw/$RunId"
 New-Item -ItemType Directory -Force -Path $evDir | Out-Null

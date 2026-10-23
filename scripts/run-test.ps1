@@ -25,7 +25,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $cfg = @{}
 Get-Content (Join-Path $root '.secrets/lab.env') | ForEach-Object { $k, $v = $_ -split '=', 2; $cfg[$k] = $v }
-az account set --subscription $cfg.SUB | Out-Null
+. (Join-Path $PSScriptRoot 'lib/azctx.ps1') -SubscriptionId $cfg.SUB
 # Probe code is embedded (base64) in each run-command, so VMs need no storage access.
 function B64File($f) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(([IO.File]::ReadAllText((Join-Path $PSScriptRoot "probe/$f"))).Replace("`r`n", "`n"))) }
 $pyB64 = B64File 'probe.py'

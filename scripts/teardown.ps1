@@ -6,7 +6,7 @@ param(
     [switch]$Yes
 )
 $ErrorActionPreference = 'Stop'
-az account set --subscription $SubscriptionId | Out-Null
+. (Join-Path $PSScriptRoot 'lib/azctx.ps1') -SubscriptionId $SubscriptionId
 $rgs = "rg-$Prefix-r1", "rg-$Prefix-r2", "rg-$Prefix-shared"
 if (-not $Yes) {
     if ((Read-Host "Delete $($rgs -join ', ')? [y/N]") -ne 'y') { return }

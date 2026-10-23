@@ -26,12 +26,13 @@ param(
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 function Epoch { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0 }
-if ($StartAt -gt 0) { $wait = $StartAt - (Epoch); if ($wait -gt 0) { Start-Sleep -Milliseconds ([int]($wait * 1000)) } }
-if ($EndAt -le 0) { $EndAt = (Epoch) + $Duration }
+# Jobs are started immediately and each waits for StartAt itself: spawning ~18 powershell.exe jobs on a
+if ($EndAt -le 0) { $EndAt = [Math]::Max((Epoch), $StartAt) + $Duration }
 
 $probe = {
-    param($Name, $Method, $Server, $EndAt, $Interval, $File, $Base)
+    param($Name, $Method, $Server, $StartAt, $EndAt, $Interval, $File, $Base)
     function Epoch { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0 }
+    $w = $StartAt - (Epoch); if ($w -gt 0) { Start-Sleep -Milliseconds ([int]($w * 1000)) }
     function Code($err) {
         $e = $err.Exception
         while ($e.InnerException -and -not ($e -is [System.ComponentModel.Win32Exception])) { $e = $e.InnerException }
@@ -80,13 +81,13 @@ $i = 0
 foreach ($n in ($Names -split ',' | Where-Object { $_ })) {
     foreach ($m in 'os', 'os-api') {
         $f = Join-Path $Out "$RunId-part$i.csv"; $i++; $parts += $f
-        $jobs += Start-Job -ScriptBlock $probe -ArgumentList $n, $m, '', $EndAt, $Interval, $f, $base
+        $jobs += Start-Job -ScriptBlock $probe -ArgumentList $n, $m, '', $StartAt, $EndAt, $Interval, $f, $base
     }
 }
 foreach ($n in ($SrvNames -split ',' | Where-Object { $_ })) {
     foreach ($s in ($Servers -split ',' | Where-Object { $_ })) {
         $f = Join-Path $Out "$RunId-part$i.csv"; $i++; $parts += $f
-        $jobs += Start-Job -ScriptBlock $probe -ArgumentList $n, 'srv', $s, $EndAt, $Interval, $f, $base
+        $jobs += Start-Job -ScriptBlock $probe -ArgumentList $n, 'srv', $s, $StartAt, $EndAt, $Interval, $f, $base
     }
 }
 $jobs | Wait-Job -Timeout ([int]($EndAt - (Epoch) + 60)) | Out-Null
@@ -104,10 +105,11 @@ if ($IngestEndpoint -and $Dcr) {
             [ordered]@{ TimeGenerated = $_.ts; RunId = $RunId; Vm = $_.vm; Os = $_.os; Design = $_.design; Profile = $_.profile
                 Name = $_.name; Method = $_.method; Server = $_.server; Rcode = $_.rcode; Answer = $_.answer; Ms = [int]$_.ms
             } })
-    if ($rows.Count) {
-        $meta = [ordered]@{}; foreach ($k in $rows[-1].Keys) { $meta[$k] = $rows[-1][$k] }
-        $meta.TimeGenerated = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ'); $meta.Name = '-'; $meta.Method = 'meta'
-        $meta.Server = ''; $meta.Rcode = 'DONE'; $meta.Answer = [string]$rows.Count; $meta.Ms = 0
+    # Always send a 'meta' row (answer = data-row count) so the collector never waits on an empty VM.
+    $meta = [ordered]@{ TimeGenerated = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ'); RunId = $RunId; Vm = $vm; Os = 'windows'
+        Design = $Design.ToUpper(); Profile = 'windows-default'; Name = '-'; Method = 'meta'; Server = ''; Rcode = 'DONE'
+        Answer = [string]$rows.Count; Ms = 0
+    }
         $batches = @()
         for ($i = 0; $i -lt $rows.Count; $i += 500) { $batches += , ($rows[$i..([Math]::Min($i + 499, $rows.Count - 1))]) }
         $batches += , @($meta)
@@ -118,6 +120,5 @@ if ($IngestEndpoint -and $Dcr) {
                 catch { Start-Sleep -Seconds (5 * ($a + 1)); if ($a -eq 4) { throw } }
             }
         }
-    }
     "ingested $($rows.Count) rows from $csv"
 }

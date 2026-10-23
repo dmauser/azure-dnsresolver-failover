@@ -20,7 +20,7 @@ $root = Split-Path $PSScriptRoot -Parent
 $secrets = Join-Path $root '.secrets'
 New-Item -ItemType Directory -Force -Path $secrets | Out-Null
 
-az account set --subscription $SubscriptionId | Out-Null
+. (Join-Path $PSScriptRoot 'lib/azctx.ps1') -SubscriptionId $SubscriptionId
 
 # SSH key (never committed; .secrets/ is git-ignored). Used only for VM creation; access is via run-command.
 $key = Join-Path $secrets 'lab_ed25519'
