@@ -38,7 +38,7 @@ function Log($evt, $detail = '') {
     Add-Content $evFile "$ts,$RunId,$Failure,$evt,$detail"
     Write-Host "$ts $Failure $evt $detail"
 }
-function Az { az @args; if ($LASTEXITCODE) { throw "az $($args -join ' ') failed" } }
+function AzX { az @args; if ($LASTEXITCODE) { throw "az $($args -join ' ') failed" } }
 
 $api = '2022-07-01'
 $resolverId = "/subscriptions/$sub/resourceGroups/$rg1/providers/Microsoft.Network/dnsResolvers/dnspr-$Prefix-r1"
@@ -49,7 +49,7 @@ $rtSpoke = "rt-$Prefix-spoke-$Design"
 $ruleName = 'lab-deny-dns'
 
 function NsgDeny($nsg, $direction, $proto, $dest = '*') {
-    Az network nsg rule create -g $rg1 --nsg-name $nsg -n $ruleName --priority 100 --direction $direction `
+    AzX network nsg rule create -g $rg1 --nsg-name $nsg -n $ruleName --priority 100 --direction $direction `
         --access Deny --protocol $proto --destination-port-ranges 53 --destination-address-prefixes $dest `
         --source-address-prefixes '*' --source-port-ranges '*' -o none
 }
@@ -70,7 +70,7 @@ switch ("$Failure/$Action") {
     'F1c/inject' { NsgDeny $nsgIn Inbound '*'; NsgDeny $nsgOut Outbound '*' }
     'F1c/restore' { NsgClear $nsgIn; NsgClear $nsgOut }
     'F2/inject' {
-        Az network route-table route create -g $rg1 --route-table-name $rtSpoke -n lab-blackhole-ie1 `
+        AzX network route-table route create -g $rg1 --route-table-name $rtSpoke -n lab-blackhole-ie1 `
             --address-prefix "$ie1/32" --next-hop-type None -o none
     }
     'F2/restore' { az network route-table route delete -g $rg1 --route-table-name $rtSpoke -n lab-blackhole-ie1 -o none }
@@ -79,12 +79,12 @@ switch ("$Failure/$Action") {
         az network vnet peering delete -g $rg1 --vnet-name "vnet-$Prefix-hub-r1" -n "to-spoke-$Design" -o none
     }
     'F3/restore' {
-        Az network vnet peering create -g $rg1 --vnet-name "vnet-$Prefix-spoke-$Design" -n to-hub-r1 `
+        AzX network vnet peering create -g $rg1 --vnet-name "vnet-$Prefix-spoke-$Design" -n to-hub-r1 `
             --remote-vnet "vnet-$Prefix-hub-r1" --allow-vnet-access -o none
-        Az network vnet peering create -g $rg1 --vnet-name "vnet-$Prefix-hub-r1" -n "to-spoke-$Design" `
+        AzX network vnet peering create -g $rg1 --vnet-name "vnet-$Prefix-hub-r1" -n "to-spoke-$Design" `
             --remote-vnet "vnet-$Prefix-spoke-$Design" --allow-vnet-access -o none
     }
-    'F4/inject' { Az rest --method delete --url "https://management.azure.com$resolverId/inboundEndpoints/in-r1?api-version=$api" }
+    'F4/inject' { AzX rest --method delete --url "https://management.azure.com$resolverId/inboundEndpoints/in-r1?api-version=$api" }
     'F4/restore' {
         $loc = az network vnet show -g $rg1 -n "vnet-$Prefix-hub-r1" --query location -o tsv
         $body = @{
@@ -97,18 +97,18 @@ switch ("$Failure/$Action") {
             }
         } | ConvertTo-Json -Depth 6 -Compress
         $tmp = New-TemporaryFile; Set-Content $tmp $body
-        Az rest --method put --url "https://management.azure.com$resolverId/inboundEndpoints/in-r1?api-version=$api" --body "@$tmp" -o none
+        AzX rest --method put --url "https://management.azure.com$resolverId/inboundEndpoints/in-r1?api-version=$api" --body "@$tmp" -o none
         Remove-Item $tmp
         # PUT returns while provisioning; wait for Succeeded so restore_done is meaningful.
         do { Start-Sleep 5; $st = az rest --method get --url "https://management.azure.com$resolverId/inboundEndpoints/in-r1?api-version=$api" --query properties.provisioningState -o tsv } while ($st -ne 'Succeeded')
     }
     'F6/inject' {
-        Az rest --method delete --url "https://management.azure.com/subscriptions/$sub/resourceGroups/$rg1/providers/Microsoft.Network/dnsForwardingRulesets/dnsfrs-$Prefix-spoke-r1/virtualNetworkLinks/spoke-c?api-version=$api"
+        AzX rest --method delete --url "https://management.azure.com/subscriptions/$sub/resourceGroups/$rg1/providers/Microsoft.Network/dnsForwardingRulesets/dnsfrs-$Prefix-spoke-r1/virtualNetworkLinks/spoke-c?api-version=$api"
     }
     'F6/restore' {
         $vnetId = "/subscriptions/$sub/resourceGroups/$rg1/providers/Microsoft.Network/virtualNetworks/vnet-$Prefix-spoke-c"
         $tmp = New-TemporaryFile; Set-Content $tmp (@{ properties = @{ virtualNetwork = @{ id = $vnetId } } } | ConvertTo-Json -Depth 4 -Compress)
-        Az rest --method put --url "https://management.azure.com/subscriptions/$sub/resourceGroups/$rg1/providers/Microsoft.Network/dnsForwardingRulesets/dnsfrs-$Prefix-spoke-r1/virtualNetworkLinks/spoke-c?api-version=$api" --body "@$tmp" -o none
+        AzX rest --method put --url "https://management.azure.com/subscriptions/$sub/resourceGroups/$rg1/providers/Microsoft.Network/dnsForwardingRulesets/dnsfrs-$Prefix-spoke-r1/virtualNetworkLinks/spoke-c?api-version=$api" --body "@$tmp" -o none
         Remove-Item $tmp
     }
 }
