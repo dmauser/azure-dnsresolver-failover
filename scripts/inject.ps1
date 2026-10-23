@@ -14,11 +14,13 @@
   F4   Delete the region-1 inbound endpoint (restore recreates it with the same static IP).
   F5u  F1a but UDP only.   F5t  F1a but TCP only.
   F6   Unlink spoke-c from the spoke ruleset (what does 168.63.129.16 return when the path breaks?).
+  onprem-link-break  Remove the on-prem site 1 <-> hub-r1 link (peering mode), so the op1 BIND forwarder
+       loses its primary target and must fail over to the region-2 inbound endpoint.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][ValidateSet('inject', 'restore')][string]$Action,
-    [Parameter(Mandatory)][ValidateSet('F1a', 'F1b', 'F1c', 'F2', 'F3', 'F4', 'F5u', 'F5t', 'F6')][string]$Failure,
+    [Parameter(Mandatory)][ValidateSet('F1a', 'F1b', 'F1c', 'F2', 'F3', 'F4', 'F5u', 'F5t', 'F6', 'onprem-link-break')][string]$Failure,
     [ValidateSet('a', 'b', 'c', 'd')][string]$Design = 'b',
     [string]$RunId = 'manual',
     [string]$Prefix = 'dnsfo'
@@ -85,6 +87,19 @@ switch ("$Failure/$Action") {
             --remote-vnet "vnet-$Prefix-hub-r1" --allow-vnet-access -o none
         AzX network vnet peering create -g $rg1 --vnet-name "vnet-$Prefix-hub-r1" -n "to-spoke-$Design" `
             --remote-vnet "vnet-$Prefix-spoke-$Design" --allow-vnet-access -o none
+    }
+    'onprem-link-break/inject' {
+        if ($cfg.ONPREM_CONNECTIVITY -ne 'Peering') { throw "onprem-link-break supports Peering mode only (ONPREM_CONNECTIVITY=$($cfg.ONPREM_CONNECTIVITY))." }
+        az network vnet peering delete -g $cfg.RG_ONPREM1 --vnet-name "vnet-$Prefix-op1" -n to-hub-r1 -o none
+        az network vnet peering delete -g $rg1 --vnet-name "vnet-$Prefix-hub-r1" -n to-op1 -o none
+    }
+    'onprem-link-break/restore' {
+        $opId = "/subscriptions/$sub/resourceGroups/$($cfg.RG_ONPREM1)/providers/Microsoft.Network/virtualNetworks/vnet-$Prefix-op1"
+        $hubId = "/subscriptions/$sub/resourceGroups/$rg1/providers/Microsoft.Network/virtualNetworks/vnet-$Prefix-hub-r1"
+        AzX network vnet peering create -g $cfg.RG_ONPREM1 --vnet-name "vnet-$Prefix-op1" -n to-hub-r1 `
+            --remote-vnet $hubId --allow-vnet-access -o none
+        AzX network vnet peering create -g $rg1 --vnet-name "vnet-$Prefix-hub-r1" -n to-op1 `
+            --remote-vnet $opId --allow-vnet-access -o none
     }
     'F4/inject' { AzX rest --method delete --url "https://management.azure.com$resolverId/inboundEndpoints/in-r1?api-version=$api" }
     'F4/restore' {

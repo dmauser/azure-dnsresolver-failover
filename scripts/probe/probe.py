@@ -123,7 +123,7 @@ def imds_token(resource):
         return json.load(r)["access_token"]
 
 
-def ingest(path, endpoint, dcr, run_id, chunk=1000):
+def ingest(path, endpoint, dcr, run_id, vm, chunk=1000):
     """Send the CSV to Log Analytics (DnsProbe_CL) via the Logs Ingestion API, then a 'meta' row
     whose answer is the data-row count so the collector knows when this VM is complete."""
     tok = imds_token("https://monitor.azure.com/")
@@ -137,7 +137,7 @@ def ingest(path, endpoint, dcr, run_id, chunk=1000):
             }
             for r in csv.DictReader(fh)
         ]
-    base = {"RunId": run_id, "Vm": socket.gethostname(), "Os": "linux", "Design": "", "Profile": ""}
+    base = {"RunId": run_id, "Vm": vm, "Os": "linux", "Design": "", "Profile": ""}
     if rows:
         base.update({k: rows[-1][k] for k in ("Design", "Profile")})
     meta = dict(base, TimeGenerated=now(), Name="-", Method="meta", Server="", Rcode="DONE", Answer=str(len(rows)), Ms=0)
@@ -177,10 +177,11 @@ def main():
     p.add_argument("--out", default="/var/log/dnsprobe")
     p.add_argument("--ingest-endpoint", default="")
     p.add_argument("--dcr", default="")
+    p.add_argument("--vm", default="", help="VM name to report (Linux hostnames can be truncated to 15 chars)")
     args = p.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
-    vm = socket.gethostname()
+    vm = args.vm or socket.gethostname()
     path = os.path.join(args.out, f"{args.run_id}_{vm}_{args.profile}.csv")
     w = Writer(path, {"vm": vm, "os": "linux", "design": args.design.upper(), "profile": args.profile})
 
@@ -210,7 +211,7 @@ def main():
     w.close()
 
     if args.ingest_endpoint and args.dcr:
-        n = ingest(path, args.ingest_endpoint, args.dcr, args.run_id)
+        n = ingest(path, args.ingest_endpoint, args.dcr, args.run_id, vm)
         print(f"ingested {n} rows from {path}")
     else:
         print(f"wrote {path}")

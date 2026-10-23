@@ -2,8 +2,9 @@ targetScope = 'subscription'
 
 // ---------------------------------------------------------------------------------------------
 // Azure DNS Private Resolver regional failover lab (Azure-to-Azure).
-// Designs A-D are deployed side by side as four spokes in the primary region so that a single
-// injected failure is observed by every design at the same time.
+// Default: the recommended Design B only (spoke custom DNS = [local IE, remote IE]).
+// includeComparisonDesigns=true also deploys Designs A, C and D side by side so that a single
+// injected failure is observed by every design at the same time (see docs/design-comparison.md).
 // ---------------------------------------------------------------------------------------------
 
 @description('Short prefix for all resource names.')
@@ -32,6 +33,8 @@ param shortTtl int = 10
 param longTtl int = 3600
 @description('Set false if the platform rejects NSGs on resolver-delegated subnets.')
 param attachResolverSubnetNsg bool = true
+@description('Also deploy comparison Designs A, C and D (extra spokes, clients and rulesets). Default: Design B only.')
+param includeComparisonDesigns bool = false
 
 var tags = {
   purpose: 'dns-resolver-failover-lab'
@@ -71,7 +74,7 @@ var r2 = {
   onpremAnswer: '192.168.20.2'
 }
 
-var spokes = [
+var allSpokes = [
   {
     design: 'a'
     prefix: '10.11.0.0/24'
@@ -97,6 +100,8 @@ var spokes = [
     windows: false
   }
 ]
+var spokes = includeComparisonDesigns ? allSpokes : filter(allSpokes, s => s.design == 'b')
+var spokeVnetIdPrefix = '/subscriptions/${subscription().subscriptionId}/resourceGroups/rg-${prefix}-r1/providers/Microsoft.Network/virtualNetworks/vnet-${prefix}-spoke-'
 
 // Resource groups ----------------------------------------------------------------------------
 resource rgShared 'Microsoft.Resources/resourceGroups@2024-03-01' = {
@@ -127,7 +132,7 @@ module hub1 'modules/hub.bicep' = {
     inboundSubnetPrefix: r1.inbound
     inboundIp: r1.inboundIp
     outboundSubnetPrefix: r1.outbound
-    outbound2SubnetPrefix: r1.outbound2
+    outbound2SubnetPrefix: includeComparisonDesigns ? r1.outbound2 : ''
     workloadSubnetPrefix: r1.workload
     peSubnetPrefix: r1.pe
     attachResolverSubnetNsg: attachResolverSubnetNsg
@@ -389,7 +394,7 @@ var spokeDomains = [
 ]
 
 // Design A + C: spoke ruleset -> local inbound endpoint only (distributed pattern).
-module rsSpoke 'modules/ruleset.bicep' = {
+module rsSpoke 'modules/ruleset.bicep' = if (includeComparisonDesigns) {
   scope: rgR1
   name: 'rs-spoke-r1'
   params: {
@@ -406,21 +411,21 @@ module rsSpoke 'modules/ruleset.bicep' = {
     links: [
       {
         name: 'spoke-a'
-        vnetId: spoke[0].outputs.vnetId
+        vnetId: '${spokeVnetIdPrefix}a'
       }
       {
         name: 'spoke-c'
-        vnetId: spoke[2].outputs.vnetId
+        vnetId: '${spokeVnetIdPrefix}c'
       }
     ]
     tags: tags
   }
-  dependsOn: [rsHub1]
+  dependsOn: [rsHub1, spoke]
 }
 
 // Design D: multi-target rules [local IE, remote IE] on a second outbound endpoint
 // (max 2 rulesets per outbound endpoint).
-module rsSpokeD 'modules/ruleset.bicep' = {
+module rsSpokeD 'modules/ruleset.bicep' = if (includeComparisonDesigns) {
   scope: rgR1
   name: 'rs-spoke-r1-d'
   params: {
@@ -437,11 +442,12 @@ module rsSpokeD 'modules/ruleset.bicep' = {
     links: [
       {
         name: 'spoke-d'
-        vnetId: spoke[3].outputs.vnetId
+        vnetId: '${spokeVnetIdPrefix}d'
       }
     ]
     tags: tags
   }
+  dependsOn: [spoke]
 }
 
 // Storage + private endpoints (H7) -----------------------------------------------------------

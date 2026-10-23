@@ -10,7 +10,7 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('F1a', 'F1b', 'F1c', 'F2', 'F3', 'F4', 'F5u', 'F5t', 'F6', 'none')][string]$Failure,
+    [Parameter(Mandatory)][ValidateSet('F1a', 'F1b', 'F1c', 'F2', 'F3', 'F4', 'F5u', 'F5t', 'F6', 'onprem-link-break', 'none')][string]$Failure,
     [ValidateSet('a', 'b', 'c', 'd')][string]$Design = 'b',
     [ValidateSet('resolved-default', 'glibc-default', 'glibc-tuned')][string]$LinuxProfile = 'resolved-default',
     [int]$BaselineSec = 60,
@@ -19,6 +19,8 @@ param(
     [int]$LeadSec = 150,
     [int]$Repeat = 1,
     [switch]$NoWindows,
+    [switch]$NoOnPrem,
+    [switch]$OnPremOnly,
     [string]$Prefix = 'dnsfo'
 )
 $ErrorActionPreference = 'Stop'
@@ -40,7 +42,21 @@ $designServers = @{
     a = @('168.63.129.16'); d = @('168.63.129.16')
     b = @($cfg.IE_R1, $cfg.IE_R2); c = @('168.63.129.16', $cfg.IE_R2)
 }
+if ($cfg.ONPREM_DNS_1) {
+    $designServers.op1 = @($cfg.ONPREM_DNS_1)
+    $designServers.op2 = @($cfg.ONPREM_DNS_2)
+}
 function Servers($d) { (@($designServers[$d]) + $cfg.IE_R1 + $cfg.IE_R2 | Select-Object -Unique) -join ',' }
+
+# Client list: design:vm:rg. Azure clients live in RG_R1; on-prem clients (ONPREM_CLIENTS = site:vm:rg) in their own RG.
+$linuxClients = @()
+if (-not $OnPremOnly) {
+    $linuxClients += @($cfg.LINUX_CLIENTS -split ',' | Where-Object { $_ } | ForEach-Object { $d, $vm = $_ -split ':'; [pscustomobject]@{ d = $d; vm = $vm; rg = $cfg.RG_R1 } })
+}
+if (-not $NoOnPrem -and $cfg.ONPREM_CLIENTS) {
+    $linuxClients += @($cfg.ONPREM_CLIENTS -split ',' | Where-Object { $_ } | ForEach-Object { $d, $vm, $rg = $_ -split ':'; [pscustomobject]@{ d = $d; vm = $vm; rg = $rg } })
+}
+if ($OnPremOnly) { $NoWindows = $true }
 
 $linuxTpl = @'
 set -e
@@ -55,7 +71,7 @@ systemctl restart systemd-resolved   # reset resolved's sticky 'current server' 
 resolvectl flush-caches || true
 systemd-run --unit "dnsprobe-__RUN__" --collect python3 /opt/dnsprobe/probe.py --run-id "__RUN__" --design "__DESIGN__" \
   --profile "__PROFILE__" --start-at __T0__ --end-at __TEND__ --names "__NAMES__" --dig-names "__DIGNAMES__" \
-  --servers "__SERVERS__" --ingest-endpoint "__ING__" --dcr "__DCR__"
+  --servers "__SERVERS__" --ingest-endpoint "__ING__" --dcr "__DCR__" --vm "__VM__"
 echo "scheduled dnsprobe-__RUN__ on $(hostname); resolv.conf: $(readlink -f /etc/resolv.conf)"
 '@
 
@@ -81,7 +97,7 @@ for ($rep = 1; $rep -le $Repeat; $rep++) {
     $tEnd = $tRestore + $RecoverySec
     $outDir = Join-Path $root "results/raw/$runId"
     New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-    $expectVms = @($cfg.LINUX_CLIENTS -split ',' | Where-Object { $_ } | ForEach-Object { ($_ -split ':')[1] })
+    $expectVms = @($linuxClients | ForEach-Object vm)
     if (-not $NoWindows) { $expectVms += @($cfg.WINDOWS_CLIENTS -split ',' | Where-Object { $_ } | ForEach-Object { ($_ -split ':')[1] }) }
     @{ run_id = $runId; failure = $Failure; design_param = $Design; linux_profile = $LinuxProfile
         t0 = $t0; t_inject_planned = $tInject; t_restore_planned = $tRestore; t_end = $tEnd; vms = $expectVms
@@ -89,12 +105,12 @@ for ($rep = 1; $rep -le $Repeat; $rep++) {
     Write-Host "== $runId  T0=$([DateTimeOffset]::FromUnixTimeSeconds($t0).UtcDateTime.ToString('HH:mm:ss'))Z" -ForegroundColor Cyan
 
     $jobs = @()
-    foreach ($pair in ($cfg.LINUX_CLIENTS -split ',' | Where-Object { $_ })) {
-        $d, $vm = $pair -split ':'
+    foreach ($c in $linuxClients) {
+        $d = $c.d; $vm = $c.vm
         $script = Fill $linuxTpl @{ PYB64 = $pyB64; ING = $cfg.INGEST_ENDPOINT; DCR = $cfg.DCR_ID; PROFILE = $LinuxProfile; RUN = $runId; DESIGN = $d; T0 = $t0; TEND = $tEnd
-            NAMES = $names; DIGNAMES = $digNames; SERVERS = (Servers $d)
+            NAMES = $names; DIGNAMES = $digNames; SERVERS = (Servers $d); VM = $vm
         }
-        $jobs += Start-ThreadJob -ArgumentList $cfg.RG_R1, $vm, $script -ScriptBlock {
+        $jobs += Start-ThreadJob -ArgumentList $c.rg, $vm, $script -ScriptBlock {
             param($rg, $vm, $s)
             $f = New-TemporaryFile; [IO.File]::WriteAllText($f, $s.Replace("`r`n", "`n"))
             $r = az vm run-command invoke -g $rg -n $vm --command-id RunShellScript --scripts "@$f" --query 'value[0].message' -o tsv 2>&1

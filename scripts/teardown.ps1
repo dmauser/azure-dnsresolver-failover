@@ -7,7 +7,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/azctx.ps1') -SubscriptionId $SubscriptionId
-$rgs = "rg-$Prefix-r1", "rg-$Prefix-r2", "rg-$Prefix-shared"
+# On-prem sites first: they hold peerings/VPN connections into the hub VNets (r1/r2).
+$rgs = "rg-$Prefix-onprem1", "rg-$Prefix-onprem2", "rg-$Prefix-r1", "rg-$Prefix-r2", "rg-$Prefix-shared"
 if (-not $Yes) {
     if ((Read-Host "Delete $($rgs -join ', ')? [y/N]") -ne 'y') { return }
 }
