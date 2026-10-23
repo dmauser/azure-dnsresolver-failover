@@ -235,6 +235,7 @@ module peerings 'modules/peering.bicep' = [
       remoteVnetId: p.remote
       peeringName: p.name
     }
+    dependsOn: [hub1, hub2, spoke]
   }
 ]
 
