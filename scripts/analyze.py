@@ -46,6 +46,7 @@ def load(run_dir):
     df = df[df["method"] != "resolvectl"]  # resolver-state snapshots, not DNS probes
     df["ts"] = pd.to_datetime(df["ts"], utc=True, format="ISO8601")
     df["ms"] = pd.to_numeric(df["ms"], errors="coerce")
+    df["answer"] = df["answer"].fillna("").astype(str)
     df["ok"] = (df["rcode"] == "NOERROR") & (df["answer"] != "")
     df["region"] = df["answer"].map(lambda a: REGION.get(a.split(";")[0], "") if a else "")
     df["end"] = df["ts"] + pd.to_timedelta(df["ms"].fillna(0), unit="ms")
