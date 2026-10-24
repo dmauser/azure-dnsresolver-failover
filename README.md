@@ -10,8 +10,14 @@ Every spoke has the inbound endpoints of **both** regional resolvers in its DNS 
 
 ---
 
+> [!NOTE]
+> **How this lab differs from the Microsoft Learn tutorial.** The official [DNS failover tutorial](https://learn.microsoft.com/azure/dns/tutorial-dns-private-resolver-failover) covers failover **from on-premises only**. This lab also covers **Azure-to-Azure** failover: what happens to Azure workloads when the resolver in their own region is lost. See [Why this lab exists](#why-this-lab-exists).
+
+---
+
 ## Contents
 
+- [Why this lab exists](#why-this-lab-exists)
 - [At a glance](#at-a-glance)
 - [Architecture](#architecture)
 - [How failover and failback work](#how-failover-and-failback-work)
@@ -23,6 +29,47 @@ Every spoke has the inbound endpoints of **both** regional resolvers in its DNS 
 - [Further reading](#further-reading)
 - [Repository layout](#repository-layout)
 - [Lab shortcuts (not for production)](#lab-shortcuts-not-for-production)
+
+---
+
+## Why this lab exists
+
+### What the Microsoft Learn tutorial covers
+
+[Tutorial: Set up DNS failover using private resolvers](https://learn.microsoft.com/azure/dns/tutorial-dns-private-resolver-failover) removes a single point of failure **in on-premises DNS**. It deploys one resolver in each of two regions. Then it configures the **on-premises DNS server** with a conditional forwarder that lists both inbound endpoints. If one region's endpoint stops answering, the on-premises server retries the other one.
+
+The tutorial is scoped deliberately:
+
+- Its scenario is two on-premises locations, each with a primary connection to its local hub and a **secondary connection to the other hub**.
+- The Azure VNets keep **Default (Azure-provided)** DNS. The tutorial says that custom DNS settings "can also be made to work, but this is not in scope".
+- The failure it demonstrates is a **broken on-premises-to-Azure connection**.
+
+### What it leaves out: Azure workloads
+
+Many enterprise landing zones use the centralized DNS pattern from [Private resolver architecture](https://learn.microsoft.com/azure/dns/private-resolver-architecture#centralized-dns-architecture). Each spoke VNet's **custom DNS server is the hub resolver's inbound endpoint** (for example `10.10.0.4`). This means every Azure VM, AKS node and App Service with VNet integration in that spoke sends its DNS queries to that single regional endpoint.
+
+So what happens to those **Azure** workloads if the regional resolver becomes unreachable?
+
+- **Availability-zone failures are already handled.** DNS Private Resolver is [zone-redundant automatically](https://learn.microsoft.com/azure/reliability/reliability-dns-private-resolver#resilience-to-availability-zone-failures) in regions that support availability zones, at no extra cost and with no configuration. A zone outage is absorbed inside the region.
+- **Region-level problems aren't.** The resolver is [a single-region service](https://learn.microsoft.com/azure/reliability/reliability-dns-private-resolver#resilience-to-region-wide-failures). A regional outage, a misconfigured NSG or UDR on the endpoint subnet, or a deleted or broken endpoint all leave the spoke with no DNS server that answers. The reliability guide recommends a second resolver in another region, and links back to the on-premises-only tutorial for the steps.
+
+Neither document explains how to give **Azure-hosted clients** a second, cross-region DNS server, or what that does to routing in a hub-spoke design. This lab fills that gap.
+
+### What this lab adds
+
+| | Microsoft Learn tutorial | This lab |
+|---|---|---|
+| **Who fails over** | On-premises DNS servers (conditional forwarders) | Azure spoke workloads (Linux and Windows VMs) **and** on-premises BIND servers |
+| **Azure VNet DNS setting** | Default (Azure-provided) | Custom DNS with **both** inbound endpoints, local endpoint first |
+| **Topology** | Two hub VNets, each with its own hybrid link | CAF multi-region hub-spoke: hubs peered globally, spokes peered to their own hub only |
+| **Cross-region path to the standby resolver** | Not needed (on-premises has a link to each hub) | Required: spoke → local hub NVA → remote hub NVA → remote resolver, through UDRs |
+| **Failures tested** | Disconnecting one on-premises link | Resolver endpoint blocked, hub-to-hub peering lost, router down, endpoint deleted, UDP-only and TCP-only loss, on-premises link break |
+| **What is measured** | Whether `nslookup` still works | Per-second probes: failover gap, time on the standby resolver, failback time, per OS and per resolver stack |
+
+In short, the tutorial answers: *"If on-premises loses one path to Azure, does it still resolve Azure private names?"* This lab answers: *"If an Azure region's resolver goes away, do the Azure workloads in that region still resolve names? How quickly do they fail over, and do they come back on their own?"*
+
+> [!TIP]
+> The [on-premises extension](#on-premises-extension) reproduces the tutorial's forwarder-based failover with BIND. It shows the other side of the tutorial's design: a site with a **single** link to one hub has no DNS failover path (≈ 180 s outage in the link-break test). That is why the tutorial gives each site a secondary connection to the other hub.
 
 ---
 
