@@ -5,9 +5,18 @@
 ![Topology](https://img.shields.io/badge/topology-CAF%20hub--spoke-5C2D91)
 ![Status](https://img.shields.io/badge/lab-validated-2E7D32)
 
-A reproducible lab that sets up **regional failover and failback for Azure DNS Private Resolver**. It uses a hub-spoke topology across two regions, aligned with the Cloud Adoption Framework (CAF). You can deploy it, inject real failures, and measure how Linux, Windows and on-premises clients behave in each case.
+In a hub-spoke landing zone, every workload depends on private DNS. It resolves private endpoints, internal applications and on-premises names through the [Azure DNS Private Resolver](https://learn.microsoft.com/azure/dns/dns-private-resolver-overview) in its regional hub. The resolver is [zone-redundant automatically](https://learn.microsoft.com/azure/reliability/reliability-dns-private-resolver#resilience-to-availability-zone-failures), so it survives the loss of an availability zone. It's also a [single-region service](https://learn.microsoft.com/azure/reliability/reliability-dns-private-resolver#resilience-to-region-wide-failures). If the regional resolver becomes unreachable, every workload that points to it loses name resolution, even when the application itself is healthy.
 
-Every spoke has the inbound endpoints of **both** regional resolvers in its DNS server list. If a region's resolver becomes unreachable, clients move to the other region in seconds. When it recovers, they move back automatically. You don't need to touch DNS settings, scripts or Traffic Manager.
+This repository is a **reference architecture and a reproducible lab** for that problem. It shows how to make private DNS survive the loss of a regional resolver, and it measures what clients actually experience during failover and failback.
+
+**How it works, in one paragraph.** Each region has its own hub with an active resolver. Each spoke lists **two** DNS servers: the inbound endpoint in its own region first, and the one in the other region second. Normally, clients query only the local resolver. If it stops answering, the client's own resolver logic retries the second server in the other region. When the local resolver recovers, clients return to it. Failover happens on the client, so there's no health probe, no DNS record change and no manual step in Azure.
+
+**What you can do with the lab:**
+
+- **Deploy** a two-region hub-spoke aligned with the Cloud Adoption Framework (CAF). Hubs are peered to each other, spokes only to their own hub, and a router in each hub carries cross-region traffic.
+- **Break things on purpose:** block a resolver, cut the hub-to-hub peering, stop a router, or disconnect an on-premises site.
+- **Measure** failover and failback, second by second, for Linux, Windows and on-premises BIND clients.
+- **Learn** the design rules that make this pattern work, and the failure modes it doesn't cover.
 
 > [!NOTE]
 > **How this lab differs from the Microsoft Learn tutorial.** The official [DNS failover tutorial](https://learn.microsoft.com/azure/dns/tutorial-dns-private-resolver-failover) covers failover **from on-premises only**. This lab also covers **Azure-to-Azure** failover: what happens to Azure workloads when the resolver in their own region is lost. See [Why this lab exists](#1-why-this-lab-exists).
