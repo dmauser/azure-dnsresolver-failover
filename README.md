@@ -13,11 +13,7 @@
 > - **Measured:** failover gap is ≈ 5.5 s on Linux, < 1 s on Windows and 1–2 s on BIND. Failback is automatic, though Windows can stay on the remote resolver for about 110 s.
 > - **Try it:** about 30 min to deploy and about $1.25/h to run. See [Quick start](#7-quick-start).
 
-In a hub-spoke landing zone, every workload uses the [Azure DNS Private Resolver](https://learn.microsoft.com/azure/dns/dns-private-resolver-overview) in its regional hub. Workloads use it to resolve private endpoints, internal applications and on-premises names. The resolver survives the loss of an availability zone, but not the loss of its region. If it becomes unreachable, healthy applications can still fail because they can't resolve names.
-
-This repository gives you a **reference architecture** for that problem and a **lab that proves it works**. It explains why client-side failover is enough, which routing it depends on, and which failures it doesn't cover.
-
-**With the lab you can:**
+This repository is a **reference architecture** for multi-region [Azure DNS Private Resolver](https://learn.microsoft.com/azure/dns/dns-private-resolver-overview) and a **reproducible lab** that proves it. With the lab you can:
 
 - **Deploy** a two-region hub-spoke aligned with the Cloud Adoption Framework (CAF), with optional emulated on-premises sites.
 - **Break things on purpose:** block a resolver, cut the hub-to-hub peering, stop a router, or disconnect an on-premises site.
