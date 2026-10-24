@@ -1,8 +1,16 @@
 # Azure DNS Private Resolver — Multi-Region Failover Reference Architecture
 
+![Azure](https://img.shields.io/badge/Azure-DNS%20Private%20Resolver-0078D4?logo=microsoftazure&logoColor=white)
+![IaC](https://img.shields.io/badge/IaC-Bicep-0078D4)
+![Topology](https://img.shields.io/badge/topology-CAF%20hub--spoke-5C2D91)
+![Status](https://img.shields.io/badge/lab-validated-2E7D32)
+
 A reproducible lab that sets up **regional failover and failback for Azure DNS Private Resolver**. It uses a hub-spoke topology across two regions, aligned with the Cloud Adoption Framework (CAF). You can deploy it, inject real failures, and measure how Linux, Windows and on-premises clients behave in each case.
 
 Every spoke has the inbound endpoints of **both** regional resolvers in its DNS server list. If a region's resolver becomes unreachable, clients move to the other region in seconds. When it recovers, they move back automatically. You don't need to touch DNS settings, scripts or Traffic Manager.
+
+> [!NOTE]
+> **How this lab differs from the Microsoft Learn tutorial.** The official [DNS failover tutorial](https://learn.microsoft.com/azure/dns/tutorial-dns-private-resolver-failover) covers failover **from on-premises only**. This lab also covers **Azure-to-Azure** failover: what happens to Azure workloads when the resolver in their own region is lost. See [Why this lab exists](#1-why-this-lab-exists).
 
 ![Reference architecture](docs/diagrams/reference-architecture.png)
 
@@ -10,23 +18,70 @@ Every spoke has the inbound endpoints of **both** regional resolvers in its DNS 
 
 ---
 
-## Contents
+## Table of contents
 
-- [At a glance](#at-a-glance)
-- [Architecture](#architecture)
-- [How failover and failback work](#how-failover-and-failback-work)
-- [Design requirements](#design-requirements)
-- [Measured results](#measured-results)
-- [Quick start](#quick-start)
-- [On-premises extension](#on-premises-extension)
-- [Failure injections](#failure-injections)
-- [Further reading](#further-reading)
-- [Repository layout](#repository-layout)
-- [Lab shortcuts (not for production)](#lab-shortcuts-not-for-production)
+1. [Why this lab exists](#1-why-this-lab-exists)
+2. [At a glance](#2-at-a-glance)
+3. [Architecture](#3-architecture)
+   - [Why hub-spoke with NVA routers](#why-hub-spoke-with-nva-routers)
+   - [Address plan](#address-plan)
+   - [Routing](#routing)
+   - [DNS components](#dns-components)
+4. [How failover and failback work](#4-how-failover-and-failback-work)
+5. [Measured results](#5-measured-results)
+6. [Cost to run the lab](#6-cost-to-run-the-lab)
+7. [Quick start](#7-quick-start)
+8. [On-premises extension](#8-on-premises-extension)
+9. [Failure injections](#9-failure-injections)
+10. [Best practices for production](#10-best-practices-for-production)
+11. [Further reading](#11-further-reading)
+12. [Repository layout](#12-repository-layout)
+13. [Lab shortcuts (not for production)](#13-lab-shortcuts-not-for-production)
 
 ---
 
-## At a glance
+## 1. Why this lab exists
+
+### What the Microsoft Learn tutorial covers
+
+[Tutorial: Set up DNS failover using private resolvers](https://learn.microsoft.com/azure/dns/tutorial-dns-private-resolver-failover) removes a single point of failure **in on-premises DNS**. It deploys one resolver in each of two regions. Then it configures the **on-premises DNS server** with a conditional forwarder that lists both inbound endpoints. If one region's endpoint stops answering, the on-premises server retries the other one.
+
+The tutorial is scoped deliberately:
+
+- Its scenario is two on-premises locations, each with a primary connection to its local hub and a **secondary connection to the other hub**.
+- The Azure VNets keep **Default (Azure-provided)** DNS. The tutorial says that custom DNS settings "can also be made to work, but this is not in scope".
+- The failure it demonstrates is a **broken on-premises-to-Azure connection**.
+
+### What it leaves out: Azure workloads
+
+Many enterprise landing zones use the centralized DNS pattern from [Private resolver architecture](https://learn.microsoft.com/azure/dns/private-resolver-architecture#centralized-dns-architecture). Each spoke VNet's **custom DNS server is the hub resolver's inbound endpoint** (for example `10.10.0.4`). This means every Azure VM, AKS node and App Service with VNet integration in that spoke sends its DNS queries to that single regional endpoint.
+
+So what happens to those **Azure** workloads if the regional resolver becomes unreachable?
+
+- **Availability-zone failures are already handled.** DNS Private Resolver is [zone-redundant automatically](https://learn.microsoft.com/azure/reliability/reliability-dns-private-resolver#resilience-to-availability-zone-failures) in regions that support availability zones, at no extra cost and with no configuration. A zone outage is absorbed inside the region.
+- **Region-level problems aren't.** The resolver is [a single-region service](https://learn.microsoft.com/azure/reliability/reliability-dns-private-resolver#resilience-to-region-wide-failures). A regional outage, a misconfigured NSG or UDR on the endpoint subnet, or a deleted or broken endpoint all leave the spoke with no DNS server that answers. The reliability guide recommends a second resolver in another region, and links back to the on-premises-only tutorial for the steps.
+
+Neither document explains how to give **Azure-hosted clients** a second, cross-region DNS server, or what that does to routing in a hub-spoke design. This lab fills that gap.
+
+### What this lab adds
+
+| | Microsoft Learn tutorial | This lab |
+|---|---|---|
+| **Who fails over** | On-premises DNS servers (conditional forwarders) | Azure spoke workloads (Linux and Windows VMs) **and** on-premises BIND servers |
+| **Azure VNet DNS setting** | Default (Azure-provided) | Custom DNS with **both** inbound endpoints, local endpoint first |
+| **Topology** | Two hub VNets, each with its own hybrid link | CAF multi-region hub-spoke: hubs peered globally, spokes peered to their own hub only |
+| **Cross-region path to the standby resolver** | Not needed (on-premises has a link to each hub) | Required: spoke → local hub NVA → remote hub NVA → remote resolver, through UDRs |
+| **Failures tested** | Disconnecting one on-premises link | Resolver endpoint blocked, hub-to-hub peering lost, router down, endpoint deleted, UDP-only and TCP-only loss, on-premises link break |
+| **What is measured** | Whether `nslookup` still works | Per-second probes: failover gap, time on the standby resolver, failback time, per OS and per resolver stack |
+
+In short, the tutorial answers: *"If on-premises loses one path to Azure, does it still resolve Azure private names?"* This lab answers: *"If an Azure region's resolver goes away, do the Azure workloads in that region still resolve names? How quickly do they fail over, and do they come back on their own?"*
+
+> [!TIP]
+> The [on-premises extension](#8-on-premises-extension) reproduces the tutorial's forwarder-based failover with BIND. It shows the other side of the tutorial's design: a site with a **single** link to one hub has no DNS failover path (≈ 180 s outage in the link-break test). That is why the tutorial gives each site a secondary connection to the other hub.
+
+---
+
+## 2. At a glance
 
 | | |
 |---|---|
@@ -35,12 +90,13 @@ Every spoke has the inbound endpoints of **both** regional resolvers in its DNS 
 | **DNS** | One DNS Private Resolver per hub, each with an inbound and an outbound endpoint. Private DNS zones are linked to **both** hubs. |
 | **Client DNS settings** | r1 spoke → `10.10.0.4, 10.20.0.4`; r2 spoke → `10.20.0.4, 10.10.0.4` (the local endpoint is listed first). |
 | **On-premises (optional)** | Two emulated sites with BIND. Each site attaches to its regional hub only, over VNet peering (default) or VPN with BGP. |
-| **Failover time** | Linux ≈ 5.5 s · Windows < 1 s gap · BIND ≈ 1–2 s (see [results](#measured-results)) |
-| **Lab cost** | ≈ $1.25/h (≈ $30/day). Details: [docs/cost.md](docs/cost.md) |
+| **Failover time** | Linux ≈ 5.5 s · Windows < 1 s gap · BIND ≈ 1–2 s (see [results](#5-measured-results)) |
+| **Lab cost** | ≈ $1.25/h (≈ $30/day) for the core lab (see [cost](#6-cost-to-run-the-lab)) |
+| **Deploy time** | ≈ 30 min core lab · +5 min on-prem (peering) or +45 min (VPN) |
 
 ---
 
-## Architecture
+## 3. Architecture
 
 ### Why hub-spoke with NVA routers
 
@@ -88,7 +144,7 @@ Every peering sets `allowForwardedTraffic`, so packets the NVAs forward are acce
 
 ---
 
-## How failover and failback work
+## 4. How failover and failback work
 
 Failover is client-side: the client walks its list of DNS servers. Nothing in Azure has to detect the outage or change configuration.
 
@@ -99,28 +155,19 @@ Failover is client-side: the client walks its list of DNS servers. Nothing in Az
 | **Failback** | Goes back to the first server once it answers again (on the next query or retry cycle). | Returns once its server-priority reset happens (about every 15 minutes, or on a network change). | Goes back as the RTT of the recovered forwarder improves. |
 
 ```text
- Spoke r1 client ──(1) 10.10.0.4 ✔──► Resolver r1        normal
+ Spoke r1 client ──(1) 10.10.0.4 ✔──► Resolver r1                         normal
  Spoke r1 client ──(1) 10.10.0.4 ✖
-                 └─(2) 10.20.0.4 ──► NVA r1 ─► NVA r2 ─► Resolver r2   failover
+                 └─(2) 10.20.0.4 ──► NVA r1 ─► NVA r2 ─► Resolver r2      failover
 ```
 
----
-
-## Design requirements
-
-1. **Link every private DNS zone to both hubs.** If a zone is linked to only one hub, the other resolver returns NXDOMAIN when failover happens.
-2. **Run both resolvers active-active, with static inbound IPs.** These IPs go into every VNet's DNS settings, so they must never change.
-3. **Give every client a working network path to both inbound endpoints.** In this design the path to the remote endpoint goes through the hub NVAs. Check UDRs, NSGs and `allowForwardedTraffic` on each hop.
-4. **Keep TTLs reasonable.** Cached answers survive a resolver outage, but stale records also outlive failback. The lab uses TTL 10 s (`app1`) and 3600 s (`app2`). BIND forwarders cap their cache with `max-cache-ttl 5`.
-5. **Treat the router as part of the DNS path.** If the NVA or the hub-to-hub peering fails, only the remote endpoint is affected, and clients keep resolving through the local one (F2/F3). Make the router highly available in production.
-
-See the official [DNS Private Resolver failover tutorial](https://learn.microsoft.com/azure/dns/tutorial-dns-private-resolver-failover) and [Reliability in Azure DNS Private Resolver](https://learn.microsoft.com/azure/reliability/reliability-dns-private-resolver).
+> [!NOTE]
+> Client behavior in this table was **observed in the lab**, not taken from a specification. Resolver libraries and OS versions differ, so measure your own client mix with the probes in this repo before you commit to an RTO.
 
 ---
 
-## Measured results
+## 5. Measured results
 
-Measured on this topology in the DMAUSER-FDPO subscription. The raw data is in [`results/raw/`](results/raw/) and the analysis in [`results/summary.md`](results/summary.md).
+Measured on this topology in an Azure test subscription. The raw data is in [`results/raw/`](results/raw/) and the analysis in [`results/summary.md`](results/summary.md).
 
 <!-- RESULTS-TABLE -->
 | Test | What fails | Clients using the OS resolver / BIND | Failback |
@@ -139,7 +186,27 @@ Measured on this topology in the DMAUSER-FDPO subscription. The raw data is in [
 
 ---
 
-## Quick start
+## 6. Cost to run the lab
+
+Indicative pay-as-you-go **list prices in USD**, taken from the [Azure Retail Prices API](https://learn.microsoft.com/rest/api/cost-management/retail-prices/azure-retail-prices) and the [Azure DNS pricing page](https://azure.microsoft.com/pricing/details/dns/) when the lab was built. Prices change and vary by region and agreement, so check the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) before you deploy.
+
+| Deployment | What it adds | ≈ per hour | ≈ per day |
+|---|---|---|---|
+| **Core lab** (`deploy.ps1`) | 2 resolvers (2 inbound + 2 outbound endpoints), 2 rulesets, 6 Linux VMs (2 NVAs, 2 clients, 2 dnsmasq), 2 Windows clients, zones, Log Analytics | **$1.25** | **$30** |
+| Core lab without Windows (`-p deployWindows=false`) | Same, minus the 2 Windows VMs | $1.08 | $26 |
+| + On-prem extension, **peering** (default) | 4 Linux VMs (2 BIND, 2 clients), 2 peerings | +$0.04 | +$1 |
+| + On-prem extension, **VPN** | Same VMs plus 4 × `VpnGw1AZ` gateways and public IPs | +$0.85 to +$0.90 | +$21 |
+
+**Where the money goes:** the four resolver endpoints (≈ $0.98/h) are about 80 % of the core lab cost. They are billed per endpoint per hour, **whether or not the VMs are running**. Auto-shutdown and deallocating VMs only save the VM part.
+
+> [!IMPORTANT]
+> **Tear the lab down when you finish** (`scripts/teardown.ps1`). Leaving it deployed with the VMs stopped still costs ≈ $1/h. A typical test session (deploy, baseline, three failure tests, analysis, teardown) takes 2–3 hours, or roughly **$3–4**.
+
+The full breakdown is in [docs/cost.md](docs/cost.md).
+
+---
+
+## 7. Quick start
 
 ### Prerequisites
 
@@ -147,6 +214,7 @@ Measured on this topology in the DMAUSER-FDPO subscription. The raw data is in [
 - Azure CLI 2.60 or later
 - Python 3.10+ with `pandas` and `matplotlib`
 - Contributor and User Access Administrator on the target subscription
+- Quota for about 8 B-series vCPUs in each region (12 with the on-prem extension)
 
 ### Deploy and test
 
@@ -171,7 +239,7 @@ pwsh scripts\run-test.ps1 -Failure F1a -OnPremOnly
 python scripts\analyze.py --all
 
 # 7. Tear down
-pwsh scripts\teardown.ps1
+pwsh scripts\teardown.ps1 -SubscriptionId <sub-id>
 ```
 
 > [!IMPORTANT]
@@ -181,7 +249,7 @@ Useful deployment parameters: `-p deployWindows=false` skips the Windows clients
 
 ---
 
-## On-premises extension
+## 8. On-premises extension
 
 `infra/onprem.bicep` (deployed with `scripts/deploy-onprem.ps1`) adds two emulated datacenters. Each one attaches **only to its own regional hub**, which is how a real branch connects through its nearest ExpressRoute or VPN location.
 
@@ -204,7 +272,7 @@ Notes:
 
 ---
 
-## Failure injections
+## 9. Failure injections
 
 `scripts/run-test.ps1 -Failure <id>` follows a baseline → fault → recovery timeline. All faults affect **region 1 only**.
 
@@ -220,9 +288,65 @@ Notes:
 
 Useful switches: `-LinuxProfile resolved-default|glibc-default|glibc-tuned`, `-Repeat N`, `-NoWindows`, `-NoOnPrem`, `-OnPremOnly`.
 
+> [!TIP]
+> **Why an NSG?** You can't stop a managed resolver on demand. An NSG rule that denies port 53 on the inbound-endpoint subnet looks exactly like an unreachable resolver to clients, and it's reversible in seconds. Use the same technique for game-day tests in a non-production environment.
+
 ---
 
-## Further reading
+## 10. Best practices for production
+
+These recommendations come from the lab results and the linked Microsoft Learn guidance. Treat them as a checklist when you design multi-region private DNS.
+
+### Resolver design
+
+| Practice | Why it matters |
+|---|---|
+| **Deploy a resolver in every region that hosts workloads, and run them active-active.** | The resolver is zone-redundant but [single-region](https://learn.microsoft.com/azure/reliability/reliability-dns-private-resolver#resilience-to-region-wide-failures). A second region is the only protection against a regional fault. |
+| **Use static IP addresses for inbound endpoints.** | These IPs are written into VNet DNS settings and on-premises forwarders. A [static address](https://learn.microsoft.com/azure/dns/private-resolver-endpoints-rulesets#static-and-dynamic-endpoint-ip-addresses) survives endpoint re-creation (see F4). |
+| **Give each endpoint its own delegated subnet, /28 at minimum.** | Endpoints can't share a subnet, and the subnet must be [between /28 and /24](https://learn.microsoft.com/azure/dns/dns-private-resolver-overview#subnet-restrictions) and delegated to `Microsoft.Network/dnsResolvers`. |
+| **Size for the per-endpoint limit.** | Each endpoint handles up to [10,000 QPS](https://learn.microsoft.com/azure/dns/dns-private-resolver-overview#restrictions). During failover, one endpoint receives **both** regions' load, so plan capacity for the combined peak. |
+
+### Client DNS configuration
+
+| Practice | Why it matters |
+|---|---|
+| **List the local inbound endpoint first and the remote one second** in each spoke's custom DNS servers. | Clients normally stay in-region (lower latency, no cross-region data charges) and fail over only when the local endpoint stops answering. |
+| **Make sure every DNS server in the list returns the same answers.** | Clients treat the servers as interchangeable. Link every private DNS zone, including `privatelink.*` zones, to **both** hubs, or failover returns NXDOMAIN. |
+| **Renew DHCP leases after changing VNet DNS servers.** | VMs pick up a new DNS server list only after a [DHCP lease renewal or restart](https://learn.microsoft.com/azure/virtual-network/virtual-networks-faq#name-resolution-dns). |
+| **Keep client timeouts short and TTLs balanced.** | Microsoft recommends a [2–5 s DNS client timeout](https://learn.microsoft.com/azure/reliability/reliability-dns-private-resolver#resilience-to-transient-faults). Very low TTLs add load and more chances to hit a fault. Very high TTLs keep stale answers after a change. |
+| **Know your clients' failback behavior.** | Windows kept using the secondary for up to ≈ 110 s after recovery in this lab. That is harmless for correctness but means cross-region traffic continues for a while. |
+
+### Network path to the standby resolver
+
+| Practice | Why it matters |
+|---|---|
+| **Treat the cross-region router as part of the DNS path.** | The standby resolver is only useful if spokes can reach it. Use Azure Firewall or highly available NVAs, not a single VM. |
+| **Allow both UDP and TCP 53** to the inbound endpoint subnets in NSGs and firewalls. | DNS falls back to TCP for large responses. Blocking only one protocol produces partial failures that are harder to diagnose; use the `F5u`/`F5t` injections to reproduce them. |
+| **Enable `allowForwardedTraffic` on every peering, and keep routing symmetric.** | Forwarded packets are dropped without it. Asymmetric return paths through stateful firewalls break DNS replies. |
+
+### Hybrid (on-premises) connectivity
+
+| Practice | Why it matters |
+|---|---|
+| **Configure on-premises forwarders with both inbound endpoints.** | This is the pattern in the [Microsoft Learn tutorial](https://learn.microsoft.com/azure/dns/tutorial-dns-private-resolver-failover). |
+| **Give every site a path to both regions** (redundant ExpressRoute/VPN, or a secondary connection to the other hub). | With a single link, the lab's site lost all Azure private names for the full ≈ 180 s outage. |
+| **Keep forwarding rulesets identical in both regions,** and deploy them from the same IaC. | After failover, queries from Azure to on-premises go through the other region's outbound endpoint and ruleset. |
+
+### Monitoring and operations
+
+| Practice | Why it matters |
+|---|---|
+| **Alert on the resolver's per-endpoint *Queries Per Second* metric.** | The [`Microsoft.Network/dnsResolvers` metrics](https://learn.microsoft.com/azure/azure-monitor/reference/supported-metrics/microsoft-network-dnsresolvers-metrics) can be split by endpoint. A sudden drop on the primary and a rise on the secondary is a clear failover signal. |
+| **Set up Resource Health and Service Health alerts.** | Microsoft [doesn't notify you automatically](https://learn.microsoft.com/azure/reliability/reliability-dns-private-resolver#behavior-during-a-zone-failure) when a resolver is impaired. |
+| **Log DNS queries with a DNS security policy.** | [`DNSQueryLogs`](https://learn.microsoft.com/azure/dns/dns-traffic-log-how-to#view-and-test-dns-logs) in Log Analytics shows which clients query which names, which is useful for checking that failback finished. |
+| **Run synthetic DNS probes from each spoke and site.** | Platform metrics don't show what a client experiences. The lab's probes (`scripts/probe/`) are a template. |
+| **Test failover regularly, and keep everything in IaC.** | Multi-region failover is a [customer-built solution](https://learn.microsoft.com/azure/reliability/reliability-dns-private-resolver#custom-multiregion-solutions-for-resiliency), so test it. The resolver stores no data; recovery means [redeploying from templates](https://learn.microsoft.com/azure/reliability/reliability-dns-private-resolver#backup-and-restore). |
+
+---
+
+## 11. Further reading
+
+**In this repository**
 
 | Document | What's inside |
 |---|---|
@@ -232,13 +356,23 @@ Useful switches: `-LinuxProfile resolved-default|glibc-default|glibc-tuned`, `-R
 | [Blog post](docs/blog-post.md) | A narrative walkthrough of the findings |
 | [Documentation feedback](docs/doc-feedback.md) | Suggested improvements to the public Microsoft Learn tutorial |
 
+**Microsoft Learn**
+
+- [What is Azure DNS Private Resolver?](https://learn.microsoft.com/azure/dns/dns-private-resolver-overview)
+- [Private resolver architecture](https://learn.microsoft.com/azure/dns/private-resolver-architecture)
+- [Tutorial: Set up DNS failover using private resolvers](https://learn.microsoft.com/azure/dns/tutorial-dns-private-resolver-failover)
+- [Reliability in Azure DNS Private Resolver](https://learn.microsoft.com/azure/reliability/reliability-dns-private-resolver)
+- [Name resolution for resources in Azure virtual networks](https://learn.microsoft.com/azure/virtual-network/virtual-networks-name-resolution-for-vms-and-role-instances)
+- [Hub-spoke network topology in Azure](https://learn.microsoft.com/azure/architecture/networking/architecture/hub-spoke)
+
 ---
 
-## Repository layout
+## 12. Repository layout
 
 ```text
 infra/               Bicep: main.bicep (hub-spoke lab), onprem.bicep (on-prem extension), modules/
-scripts/             deploy, deploy-onprem, run-test, inject, analyze, teardown, probes
+scripts/             deploy, deploy-onprem, run-test, inject, collect, analyze, teardown
+scripts/probe/       DNS probe agents (Linux: probe.py, Windows: probe.ps1)
 results/raw/         One folder per experiment run (events.csv, timeline, metadata)
 results/summary.md   Generated analysis
 docs/                Design rationale, cost, blog post, diagrams
@@ -246,10 +380,10 @@ docs/                Design rationale, cost, blog post, diagrams
 
 ---
 
-## Lab shortcuts (not for production)
+## 13. Lab shortcuts (not for production)
 
 - VMs have no public IPs. Use `az vm run-command` to access them. Subnets use `defaultOutboundAccess: true` so package installs work.
-- The routers are single Linux VMs (see the warning above).
+- The routers are single Linux VMs (see the warning in [Architecture](#why-hub-spoke-with-nva-routers)).
 - Probes send their results to a `DnsProbe_CL` table through the Logs Ingestion API, using managed identity. The lab doesn't use a storage account.
 - Every resource has `owner` and `ttl` tags. Delete everything with `scripts/teardown.ps1`.
 
