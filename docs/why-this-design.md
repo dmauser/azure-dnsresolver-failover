@@ -1,12 +1,12 @@
-# Design comparison: why Design B is the recommended architecture
+# Why this design: comparing four ways to point Azure VMs at DNS Private Resolver
 
-← Back to the [recommended reference architecture (Design B)](../README.md)
+← Back to the [recommended reference architecture](../README.md)
 
-> **Scope.** This page compares four ways to point Azure VMs at DNS Private Resolver and shows the measurements that led us to recommend **Design B**. It covers the **Azure VM → resolver** path. On-premises → Azure failover is covered by the [Microsoft Learn tutorial](https://learn.microsoft.com/azure/dns/tutorial-dns-private-resolver-failover) and by the on-premises extension of this lab ([README](../README.md#on-premises-extension)).
+> **Scope.** This page compares four ways to point Azure VMs at DNS Private Resolver. The recommended architecture on the main page is **Design B** — spoke VNet DNS servers set to the inbound endpoints of **both** regions. This page covers the **Azure VM → resolver** path. On-premises → Azure failover is covered by the [Microsoft Learn tutorial](https://learn.microsoft.com/azure/dns/tutorial-dns-private-resolver-failover) and by the on-premises extension of this lab ([README](../README.md#on-premises-extension)).
 >
 > **Evidence rule.** Every statement is either **measured** in this lab (run IDs in [results/summary.md](../results/summary.md)) or **cited** to Microsoft Learn. Anything else is labelled *hypothesis* or *inference*.
 >
-> **Deploying the comparison designs.** The default deployment builds Design B only. To reproduce this page, deploy with `./scripts/deploy.ps1 ... -IncludeComparisonDesigns`, which adds spokes A, C and D, the spoke rulesets and the second outbound endpoint.
+> **Historical results.** The A–D comparison below was measured on an **earlier lab topology** in which four spokes in r1 were peered directly to **both** hubs. The current lab implements only Design B on a CAF-style hub-spoke with NVA routers between the regional hubs; the comparison designs are no longer deployable from this repo. The numbers are kept as the evidence behind the recommendation.
 
 ## TL;DR
 
@@ -21,9 +21,9 @@ Long TTLs hide short outages (app2, TTL 3600: ≥ 96.6 % even on Design A) but t
 
 ![Comparison lab topology (designs A–D)](diagrams/dns-resolver-failover-lab.png)
 
-*Topology with `-IncludeComparisonDesigns`. Editable source: [diagrams/dns-resolver-failover-lab.drawio](diagrams/dns-resolver-failover-lab.drawio).*
+*Historical comparison topology (designs A–D). Editable source: [diagrams/dns-resolver-failover-lab.drawio](diagrams/dns-resolver-failover-lab.drawio).*
 
-## 1. Topology
+## 1. Topology (historical)
 
 | Component | Region 1 (eastus2) | Region 2 (centralus) |
 |---|---|---|
@@ -59,7 +59,7 @@ Probes query four names every second (`app1` TTL 10 s, `app2` TTL 3600 s, a priv
 
 ## 3. Failure injections
 
-None of these is a real regional outage — see [§6 Fidelity limits](#6-fidelity-limits). Each run is 2 min baseline, 5 min failure and 3 min recovery unless stated otherwise.
+None of these is a real regional outage — see [§6 Fidelity limits](#6-fidelity-limits). Each run is 2 min baseline, 5 min failure and 3 min recovery unless stated otherwise. These are the injections used for the historical comparison; F1b and F6 are not available in the current lab, and F2/F3 now target the hub ↔ hub peering and the r1 NVA router (see the [README](../README.md#failure-injections)).
 
 | ID | Injection | Emulates |
 |---|---|---|
@@ -104,6 +104,11 @@ Failover and failback timing (time from injection to first answer from r2, and f
 | F5u (UDP-only loss) | B 8.8 s / 27.4 s (Linux/Win); C 38.4 s / 27.6 s; D 25.4 s | D ≈ 169 s | Clients didn't retry over TCP; A kept answering from cache |
 
 Full per-run tables (all names, methods, rcodes, p50/max latency) and timeline charts are in [`results/raw/<run>/summary.md`](../results/summary.md).
+
+> **Re-test on the hub-spoke topology.** The numbers above come from the original flat-peering lab. Design B was re-tested after the move to the CAF hub-spoke topology with NVA routers (runs `20261023T2046…` to `20261023T2121…`):
+> - F1a: Linux max gap ≈ 5.5 s (on r2 after ≈ 8.5 s). Windows max gap < 1 s, but it stayed on r2 for ≈ 110 s. On-prem BIND 0.5–1.8 s. Still 100 % success through the OS resolver.
+> - F2 (hub peering removed) and F3 (NVA down): no client impact (gaps 0.5–1.4 s). Failback ≤ 0.5 s.
+> - On-prem link break: the site lost Azure private names for the full ≈ 180 s, because each site now attaches to one hub only. In the flat lab it recovered in ≈ 0.4 s because it could reach both hubs.
 
 ### Key observations
 
@@ -151,7 +156,7 @@ Full per-run tables (all names, methods, rcodes, p50/max latency) and timeline c
 
 ## 8. Reproduce
 
-Follow the [README](../README.md#deploy-the-lab) and add `-IncludeComparisonDesigns` to `deploy.ps1`. Then run tests with `-Design a|b|c|d`, for example `./scripts/run-test.ps1 -Failure F6 -Design c`. With all four designs the lab costs ≈ $1.5/hour, against ≈ $1.1/hour for B only ([cost.md](cost.md)). Tear it down with `scripts/teardown.ps1` when you're done.
+The comparison designs A, C and D are historical and are no longer part of the Bicep. The raw data for every comparison run is kept under [`results/raw/`](../results/summary.md). To reproduce the recommended design (B) on the current hub-spoke topology, follow the [README quick start](../README.md#quick-start) ([cost.md](cost.md) has the hourly cost). Tear the lab down with `scripts/teardown.ps1` when you're done.
 
 ---
 

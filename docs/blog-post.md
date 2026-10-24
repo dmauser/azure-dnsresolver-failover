@@ -6,7 +6,7 @@ Microsoft Learn shows how **on-premises** DNS servers fail over between two Azur
 
 > *My Azure VMs resolve private zones through a resolver in region 1. If that resolver becomes unreachable, do they fail over to region 2 — and how fast do they come back?*
 
-I built a lab to find out. Everything below was **measured** or is **cited** to Microsoft Learn. The full method, tables and caveats are in the [design comparison](design-comparison.md), and the recommended architecture is in the [README](../README.md).
+I built a lab to find out. Everything below was **measured** or is **cited** to Microsoft Learn. The design comparison, method and caveats are in [Why this design](why-this-design.md), and the recommended hub-spoke reference architecture is in the [README](../README.md).
 
 ![Lab topology](diagrams/dns-resolver-failover-lab.png)
 
@@ -56,7 +56,7 @@ OS-level success for a 10-second-TTL record during a 5-minute failure:
 
 ## Caveats
 
-This is **not** a real regional outage. I can block paths and delete endpoints, but I can't take down a region's control plane or 168.63.129.16 itself. It's one region pair, a few runs per scenario, and default OS settings. Treat the numbers as directional and re-run the lab for your own setup — it's all in the repo, costs about $1.1/hour for Design B only (about $1.5/hour with all four designs), and tears down with one script.
+This is **not** a real regional outage. I can block paths and delete endpoints, but I can't take down a region's control plane or 168.63.129.16 itself. It's one region pair, a few runs per scenario, and default OS settings. Treat the numbers as directional and re-run the lab for your own setup — it's all in the repo, costs about $1.25/hour for the two-region hub-spoke lab, and tears down with one script.
 
 ---
 

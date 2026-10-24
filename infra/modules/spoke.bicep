@@ -1,17 +1,20 @@
-// Spoke VNet with one client subnet. NSG and route table start empty; failure scripts add rules.
+// Regional spoke VNet with one client subnet. The route table sends the other region's summaries
+// to the local hub NVA (spokes peer only with their own hub). Failure scripts add NSG rules.
 param location string
 param prefix string
-param design string // a | b | c | d
+param regionTag string // r1 | r2
 param addressPrefix string
 param subnetPrefix string
 @description('Custom DNS servers. Empty array = Default (Azure-provided).')
 param dnsServers array = []
+@description('Route table entries (name, addressPrefix, nextHopType, nextHopIpAddress).')
+param routes array = []
 param tags object
 
-var name = 'vnet-${prefix}-spoke-${design}'
+var name = 'vnet-${prefix}-spoke-${regionTag}'
 
 resource nsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
-  name: 'nsg-${prefix}-spoke-${design}'
+  name: 'nsg-${prefix}-spoke-${regionTag}'
   location: location
   tags: tags
   properties: {
@@ -20,19 +23,28 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
 }
 
 resource rt 'Microsoft.Network/routeTables@2024-05-01' = {
-  name: 'rt-${prefix}-spoke-${design}'
+  name: 'rt-${prefix}-spoke-${regionTag}'
   location: location
   tags: tags
   properties: {
     disableBgpRoutePropagation: false
-    routes: []
+    routes: [
+      for r in routes: {
+        name: r.name
+        properties: {
+          addressPrefix: r.addressPrefix
+          nextHopType: r.nextHopType
+          nextHopIpAddress: r.?nextHopIpAddress
+        }
+      }
+    ]
   }
 }
 
 resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
   name: name
   location: location
-  tags: union(tags, { design: toUpper(design) })
+  tags: union(tags, { region: regionTag })
   properties: {
     addressSpace: {
       addressPrefixes: [addressPrefix]

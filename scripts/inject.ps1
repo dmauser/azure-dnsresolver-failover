@@ -5,23 +5,21 @@
 
 .DESCRIPTION
   F1a  NSG deny UDP+TCP/53 inbound on the region-1 inbound endpoint subnet (snet-dns-inbound).
-  F1b  NSG deny UDP+TCP/53 outbound to 10.10.0.4 on a client spoke subnet (-Design, default b).
-      NOTE: in testing this rule showed in effective rules but did NOT block DNS to the
-      inbound endpoint. Verify with dig @10.10.0.4, or prefer F2/F3 for path loss.
-  F1c  F1a + NSG deny outbound 53 on both region-1 outbound endpoint subnets (whole regional resolver).
-  F2   UDR 10.10.0.4/32 -> None on a client spoke (-Design, default b). Direct client->IE traffic only.
-  F3   Remove spoke <-> hub-r1 peering (-Design, default b).
+       Emulates a regional resolver outage for clients; this is the reference failover test.
+  F1c  F1a + NSG deny outbound 53 on the region-1 outbound endpoint subnet (whole regional resolver).
+  F2   Delete the hub-r1 <-> hub-r2 global peering (both directions). Cross-region path loss:
+       region-1 clients can still reach IE1; nothing can reach the other region's inbound endpoint.
+  F3   Stop (deallocate) the region-1 NVA router. Cross-region traffic from region 1 is black-holed.
   F4   Delete the region-1 inbound endpoint (restore recreates it with the same static IP).
   F5u  F1a but UDP only.   F5t  F1a but TCP only.
-  F6   Unlink spoke-c from the spoke ruleset (what does 168.63.129.16 return when the path breaks?).
-  onprem-link-break  Remove the on-prem site 1 <-> hub-r1 link (peering mode), so the op1 BIND forwarder
-       loses its primary target and must fail over to the region-2 inbound endpoint.
+  onprem-link-break  Remove the on-prem site 1 <-> hub-r1 link (peering mode). Site 1 attaches only to
+       hub-r1, so both of its forwarder targets (IE r1 and, via the hub NVA, IE r2) become unreachable:
+       this demonstrates that the site's own hub link is a single point of failure.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][ValidateSet('inject', 'restore')][string]$Action,
-    [Parameter(Mandatory)][ValidateSet('F1a', 'F1b', 'F1c', 'F2', 'F3', 'F4', 'F5u', 'F5t', 'F6', 'onprem-link-break')][string]$Failure,
-    [ValidateSet('a', 'b', 'c', 'd')][string]$Design = 'b',
+    [Parameter(Mandatory)][ValidateSet('F1a', 'F1c', 'F2', 'F3', 'F4', 'F5u', 'F5t', 'onprem-link-break')][string]$Failure,
     [string]$RunId = 'manual',
     [string]$Prefix = 'dnsfo'
 )
@@ -30,7 +28,7 @@ $root = Split-Path $PSScriptRoot -Parent
 $envFile = Join-Path $root '.secrets/lab.env'
 $cfg = @{}
 Get-Content $envFile | ForEach-Object { $k, $v = $_ -split '=', 2; $cfg[$k] = $v }
-$sub = $cfg.SUB; $rg1 = $cfg.RG_R1; $ie1 = $cfg.IE_R1
+$sub = $cfg.SUB; $rg1 = $cfg.RG_R1; $rg2 = $cfg.RG_R2; $ie1 = $cfg.IE_R1
 . (Join-Path $PSScriptRoot 'lib/azctx.ps1') -SubscriptionId $sub
 
 $evDir = Join-Path $root "results/raw/$RunId"
@@ -48,8 +46,10 @@ $api = '2022-07-01'
 $resolverId = "/subscriptions/$sub/resourceGroups/$rg1/providers/Microsoft.Network/dnsResolvers/dnspr-$Prefix-r1"
 $nsgIn = "nsg-$Prefix-hub-r1-dnsin"
 $nsgOut = "nsg-$Prefix-hub-r1-dnsout"
-$nsgSpoke = "nsg-$Prefix-spoke-$Design"
-$rtSpoke = "rt-$Prefix-spoke-$Design"
+$hub1 = "vnet-$Prefix-hub-r1"; $hub2 = "vnet-$Prefix-hub-r2"
+$hub1Id = "/subscriptions/$sub/resourceGroups/$rg1/providers/Microsoft.Network/virtualNetworks/$hub1"
+$hub2Id = "/subscriptions/$sub/resourceGroups/$rg2/providers/Microsoft.Network/virtualNetworks/$hub2"
+$nvaVm = if ($cfg.NVA_VM_R1) { $cfg.NVA_VM_R1 } else { "vm-$Prefix-nva-r1" }
 $ruleName = 'lab-deny-dns'
 
 function NsgDeny($nsg, $direction, $proto, $dest = '*') {
@@ -60,8 +60,15 @@ function NsgDeny($nsg, $direction, $proto, $dest = '*') {
 function NsgClear($nsg) {
     az network nsg rule delete -g $rg1 --nsg-name $nsg -n $ruleName -o none 2>$null
 }
+function Peer($rg, $vnet, $name, $remoteId, [switch]$UseRemoteGw, [switch]$AllowGwTransit) {
+    $a = @('network', 'vnet', 'peering', 'create', '-g', $rg, '--vnet-name', $vnet, '-n', $name, '--remote-vnet', $remoteId,
+        '--allow-vnet-access', '--allow-forwarded-traffic', '-o', 'none')
+    if ($UseRemoteGw) { $a += '--use-remote-gateways' }
+    if ($AllowGwTransit) { $a += '--allow-gateway-transit' }
+    AzX @a
+}
 
-Log "$($Action)_start" "design=$Design"
+Log "$($Action)_start"
 switch ("$Failure/$Action") {
     'F1a/inject' { NsgDeny $nsgIn Inbound '*' }
     'F1a/restore' { NsgClear $nsgIn }
@@ -69,48 +76,38 @@ switch ("$Failure/$Action") {
     'F5u/restore' { NsgClear $nsgIn }
     'F5t/inject' { NsgDeny $nsgIn Inbound Tcp }
     'F5t/restore' { NsgClear $nsgIn }
-    'F1b/inject' { NsgDeny $nsgSpoke Outbound '*' "$ie1/32" }
-    'F1b/restore' { NsgClear $nsgSpoke }
     'F1c/inject' { NsgDeny $nsgIn Inbound '*'; NsgDeny $nsgOut Outbound '*' }
     'F1c/restore' { NsgClear $nsgIn; NsgClear $nsgOut }
     'F2/inject' {
-        AzX network route-table route create -g $rg1 --route-table-name $rtSpoke -n lab-blackhole-ie1 `
-            --address-prefix "$ie1/32" --next-hop-type None -o none
+        az network vnet peering delete -g $rg1 --vnet-name $hub1 -n to-hub-r2 -o none
+        az network vnet peering delete -g $rg2 --vnet-name $hub2 -n to-hub-r1 -o none
     }
-    'F2/restore' { az network route-table route delete -g $rg1 --route-table-name $rtSpoke -n lab-blackhole-ie1 -o none }
-    'F3/inject' {
-        az network vnet peering delete -g $rg1 --vnet-name "vnet-$Prefix-spoke-$Design" -n to-hub-r1 -o none
-        az network vnet peering delete -g $rg1 --vnet-name "vnet-$Prefix-hub-r1" -n "to-spoke-$Design" -o none
+    'F2/restore' {
+        Peer $rg1 $hub1 'to-hub-r2' $hub2Id
+        Peer $rg2 $hub2 'to-hub-r1' $hub1Id
     }
-    'F3/restore' {
-        AzX network vnet peering create -g $rg1 --vnet-name "vnet-$Prefix-spoke-$Design" -n to-hub-r1 `
-            --remote-vnet "vnet-$Prefix-hub-r1" --allow-vnet-access -o none
-        AzX network vnet peering create -g $rg1 --vnet-name "vnet-$Prefix-hub-r1" -n "to-spoke-$Design" `
-            --remote-vnet "vnet-$Prefix-spoke-$Design" --allow-vnet-access -o none
-    }
+    'F3/inject' { AzX vm deallocate -g $rg1 -n $nvaVm -o none }
+    'F3/restore' { AzX vm start -g $rg1 -n $nvaVm -o none }
     'onprem-link-break/inject' {
         if ($cfg.ONPREM_CONNECTIVITY -ne 'Peering') { throw "onprem-link-break supports Peering mode only (ONPREM_CONNECTIVITY=$($cfg.ONPREM_CONNECTIVITY))." }
         az network vnet peering delete -g $cfg.RG_ONPREM1 --vnet-name "vnet-$Prefix-op1" -n to-hub-r1 -o none
-        az network vnet peering delete -g $rg1 --vnet-name "vnet-$Prefix-hub-r1" -n to-op1 -o none
+        az network vnet peering delete -g $rg1 --vnet-name $hub1 -n to-op1 -o none
     }
     'onprem-link-break/restore' {
         $opId = "/subscriptions/$sub/resourceGroups/$($cfg.RG_ONPREM1)/providers/Microsoft.Network/virtualNetworks/vnet-$Prefix-op1"
-        $hubId = "/subscriptions/$sub/resourceGroups/$rg1/providers/Microsoft.Network/virtualNetworks/vnet-$Prefix-hub-r1"
-        AzX network vnet peering create -g $cfg.RG_ONPREM1 --vnet-name "vnet-$Prefix-op1" -n to-hub-r1 `
-            --remote-vnet $hubId --allow-vnet-access -o none
-        AzX network vnet peering create -g $rg1 --vnet-name "vnet-$Prefix-hub-r1" -n to-op1 `
-            --remote-vnet $opId --allow-vnet-access -o none
+        Peer $cfg.RG_ONPREM1 "vnet-$Prefix-op1" 'to-hub-r1' $hub1Id
+        Peer $rg1 $hub1 'to-op1' $opId
     }
     'F4/inject' { AzX rest --method delete --url "https://management.azure.com$resolverId/inboundEndpoints/in-r1?api-version=$api" }
     'F4/restore' {
-        $loc = az network vnet show -g $rg1 -n "vnet-$Prefix-hub-r1" --query location -o tsv
+        $loc = az network vnet show -g $rg1 -n $hub1 --query location -o tsv
         $body = @{
             location   = $loc
             properties = @{ ipConfigurations = @(@{
-                        subnet                    = @{ id = "/subscriptions/$sub/resourceGroups/$rg1/providers/Microsoft.Network/virtualNetworks/vnet-$Prefix-hub-r1/subnets/snet-dns-inbound" }
+                        subnet                    = @{ id = "$hub1Id/subnets/snet-dns-inbound" }
                         privateIpAddress          = $ie1
                         privateIpAllocationMethod = 'Static'
-                    }) 
+                    })
             }
         } | ConvertTo-Json -Depth 6 -Compress
         $tmp = New-TemporaryFile; Set-Content $tmp $body
@@ -119,14 +116,5 @@ switch ("$Failure/$Action") {
         # PUT returns while provisioning; wait for Succeeded so restore_done is meaningful.
         do { Start-Sleep 5; $st = az rest --method get --url "https://management.azure.com$resolverId/inboundEndpoints/in-r1?api-version=$api" --query properties.provisioningState -o tsv } while ($st -ne 'Succeeded')
     }
-    'F6/inject' {
-        AzX rest --method delete --url "https://management.azure.com/subscriptions/$sub/resourceGroups/$rg1/providers/Microsoft.Network/dnsForwardingRulesets/dnsfrs-$Prefix-spoke-r1/virtualNetworkLinks/spoke-c?api-version=$api"
-    }
-    'F6/restore' {
-        $vnetId = "/subscriptions/$sub/resourceGroups/$rg1/providers/Microsoft.Network/virtualNetworks/vnet-$Prefix-spoke-c"
-        $tmp = New-TemporaryFile; Set-Content $tmp (@{ properties = @{ virtualNetwork = @{ id = $vnetId } } } | ConvertTo-Json -Depth 4 -Compress)
-        AzX rest --method put --url "https://management.azure.com/subscriptions/$sub/resourceGroups/$rg1/providers/Microsoft.Network/dnsForwardingRulesets/dnsfrs-$Prefix-spoke-r1/virtualNetworkLinks/spoke-c?api-version=$api" --body "@$tmp" -o none
-        Remove-Item $tmp
-    }
 }
-Log "$($Action)_done" "design=$Design"
+Log "$($Action)_done"

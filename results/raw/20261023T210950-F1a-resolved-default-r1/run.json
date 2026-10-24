@@ -1,0 +1,17 @@
+{
+  "t_inject_planned": 1792790000,
+  "t_end": 1792790360,
+  "vms": [
+    "vm-dnsfo-lnx-r1",
+    "vm-dnsfo-lnx-r2",
+    "vm-dnsfo-lnx-op1",
+    "vm-dnsfo-lnx-op2",
+    "vm-dnsfo-win-r1",
+    "vm-dnsfo-win-r2"
+  ],
+  "t0": 1792789940,
+  "t_restore_planned": 1792790180,
+  "linux_profile": "resolved-default",
+  "run_id": "20261023T210950-F1a-resolved-default-r1",
+  "failure": "F1a"
+}
