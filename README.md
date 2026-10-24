@@ -5,21 +5,22 @@
 ![Topology](https://img.shields.io/badge/topology-CAF%20hub--spoke-5C2D91)
 ![Status](https://img.shields.io/badge/lab-validated-2E7D32)
 
-In a hub-spoke landing zone, every workload depends on private DNS. It resolves private endpoints, internal applications and on-premises names through the [Azure DNS Private Resolver](https://learn.microsoft.com/azure/dns/dns-private-resolver-overview) in its regional hub. The resolver is [zone-redundant automatically](https://learn.microsoft.com/azure/reliability/reliability-dns-private-resolver#resilience-to-availability-zone-failures), so it survives the loss of an availability zone. It's also a [single-region service](https://learn.microsoft.com/azure/reliability/reliability-dns-private-resolver#resilience-to-region-wide-failures). If the regional resolver becomes unreachable, every workload that points to it loses name resolution, even when the application itself is healthy.
+> [!IMPORTANT]
+> **TL;DR**
+> - **Problem:** Azure DNS Private Resolver is zone-redundant but **single-region**. If a hub's resolver becomes unreachable, every spoke that points to it loses private DNS.
+> - **Pattern:** set each spoke's custom DNS to **both** regional inbound endpoints, local one first. Clients fail over to the other region on their own, then fail back. No probes, record changes or runbooks.
+> - **Requirement:** in a CAF hub-spoke, spokes need a routed path to the remote hub. Here, a router (NVA) and UDRs in each hub provide it.
+> - **Measured:** failover gap is ≈ 5.5 s on Linux, < 1 s on Windows and 1–2 s on BIND. Failback is automatic, though Windows can stay on the remote resolver for about 110 s.
+> - **Try it:** about 30 min to deploy and about $1.25/h to run. See [Quick start](#7-quick-start).
 
-This repository is a **reference architecture and a reproducible lab** for that problem. It shows how to make private DNS survive the loss of a regional resolver, and it measures what clients actually experience during failover and failback.
+This repository is a **reference architecture** for multi-region [Azure DNS Private Resolver](https://learn.microsoft.com/azure/dns/dns-private-resolver-overview) and a **reproducible lab** that proves it. With the lab you can:
 
-**How it works, in one paragraph.** Each region has its own hub with an active resolver. Each spoke lists **two** DNS servers: the inbound endpoint in its own region first, and the one in the other region second. Normally, clients query only the local resolver. If it stops answering, the client's own resolver logic retries the second server in the other region. When the local resolver recovers, clients return to it. Failover happens on the client, so there's no health probe, no DNS record change and no manual step in Azure.
-
-**What you can do with the lab:**
-
-- **Deploy** a two-region hub-spoke aligned with the Cloud Adoption Framework (CAF). Hubs are peered to each other, spokes only to their own hub, and a router in each hub carries cross-region traffic.
+- **Deploy** a two-region hub-spoke aligned with the Cloud Adoption Framework (CAF), with optional emulated on-premises sites.
 - **Break things on purpose:** block a resolver, cut the hub-to-hub peering, stop a router, or disconnect an on-premises site.
-- **Measure** failover and failback, second by second, for Linux, Windows and on-premises BIND clients.
-- **Learn** the design rules that make this pattern work, and the failure modes it doesn't cover.
+- **Measure** failover and failback, second by second, for Linux, Windows and BIND clients.
 
 > [!NOTE]
-> **How this lab differs from the Microsoft Learn tutorial.** The official [DNS failover tutorial](https://learn.microsoft.com/azure/dns/tutorial-dns-private-resolver-failover) covers failover **from on-premises only**. This lab also covers **Azure-to-Azure** failover: what happens to Azure workloads when the resolver in their own region is lost. See [Why this lab exists](#1-why-this-lab-exists).
+> The Microsoft Learn [DNS failover tutorial](https://learn.microsoft.com/azure/dns/tutorial-dns-private-resolver-failover) covers failover **from on-premises only**. This lab adds **Azure-to-Azure** failover. See [Why this lab exists](#1-why-this-lab-exists).
 
 ![Reference architecture](docs/diagrams/reference-architecture.png)
 
